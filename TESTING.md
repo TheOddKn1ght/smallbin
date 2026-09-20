@@ -9,7 +9,7 @@ bun run test
 bun run test:coverage
 ```
 
-The Bun suites cover the encryption envelope, malformed/tampered input, server routes, SQLite migrations and recovery, expiry, transfer limits, quotas, throttling, and deployment configuration. Tests use isolated temporary storage. Coverage is an aid to finding gaps; it is not proof of secure cryptography or correct deployment.
+The Bun suites cover the encryption envelope, malformed/tampered input, server routes, SQLite migrations and recovery, expiry, transfer limits, quotas, throttling, and deployment configuration. Tests use isolated temporary storage. The interactive setup tests execute Bash against temporary checkouts, covering config generation, validation, cancellation, backups, and safe handling of existing environment files without changing the host. Coverage is an aid to finding gaps; it is not proof of secure cryptography or correct deployment.
 
 ## GitHub Actions
 
@@ -75,6 +75,7 @@ All containers bind only to randomly assigned localhost ports. Resource names ha
 | Downloads started before expiry, cancellation/deadlines, released quotas, graceful shutdown | `tests/server/app.test.ts`, `tests/server/storage.test.ts`. |
 | CSP and other privacy headers, static-file isolation, missing frontend rejection | `tests/http/static.test.ts`, `tests/server/app.test.ts`; nginx-generated errors in the unrun deployment script. |
 | Non-root Docker, private ports, persistent volume, healthcheck, 14-day dependency age, nginx buffering/cache/log configuration | `tests/deployment/contracts.test.ts`; actual containers, maximum proxy transfer, 413/429/502, log checks in `scripts/deployment-smoke.ts` (not yet executed successfully). |
+| Interactive setup, generated configuration, input validation, cancellation, and config backups | `tests/deployment/setup.test.ts`; real package installation, certificate issuance, and system service changes require verification on a deployment host. |
 | Host TLS, certificate renewal, gateway discovery, upgrade/rollback, volume permissions and backup exclusions | Operator checklist and commands in `DEPLOYMENT.md`; these host-specific steps require verification on the deployment host. |
 
 The files above identify the assertions to run, not a blanket promise of complete coverage. State the commands and results from the current checkout when reporting verification.

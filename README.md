@@ -36,3 +36,13 @@ bun run test:e2e
 ```
 
 See [TESTING.md](TESTING.md) for browser and deployment checks, and [DEPLOYMENT.md](DEPLOYMENT.md) for Docker, nginx, TLS, migrations, and upgrades.
+
+## Server setup
+
+On a Debian/Ubuntu server with your domain pointing to it:
+
+```sh
+bash scripts/setup.sh
+```
+
+Use `bash scripts/setup.sh --prepare-only` to generate configuration without changing the host. See [DEPLOYMENT.md](DEPLOYMENT.md#interactive-setup) for prerequisites and rerun behavior.

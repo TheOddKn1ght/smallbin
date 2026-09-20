@@ -4,7 +4,29 @@ The supported production layout is one Bun container with a local Docker volume,
 
 You need Docker Engine with the Compose plugin, nginx, Certbot, a domain pointing to the host, and inbound TCP ports 80 and 443. The local verification commands also require Bun 1.4.2. Keep port 3210 private. Browser encryption requires HTTPS, except for browser development on localhost. The commands below assume a Debian/Ubuntu host and a checkout of this repository.
 
-## First deployment
+## Interactive setup
+
+From a checkout on your Debian/Ubuntu server, run:
+
+```sh
+bash scripts/setup.sh
+```
+
+The script asks for your domain, loopback port (default `3210`), and storage quota (default 10 GB), then shows the configuration before applying it. Point the domain's DNS records at the server and allow incoming TCP 80/443 first. Run it as your normal user with sudo access, or as root. Keep this checkout available for future Compose commands.
+
+It can install missing prerequisites, builds a uniquely tagged application image, discovers the Docker bridge gateway, starts the app, configures host nginx, obtains a certificate through interactive Certbot, and enables certificate renewal. Certbot presents its own account and terms prompts. Bun is supplied by the Docker build; a separate host Bun installation is only needed for local test commands.
+
+To generate configuration for review without installing packages, contacting certificate services, or starting containers:
+
+```sh
+bash scripts/setup.sh --prepare-only
+```
+
+This mode also works on macOS. It writes a private `.env` and rendered `deploy/generated/nginx-http.conf` and `deploy/generated/nginx-https.conf`; the checked-in templates remain unchanged. Existing configuration requires replacement confirmation and is backed up before replacement. The script reads supported `.env` values as data, without executing shell expressions. Review the generated files before running the full setup.
+
+Full setup targets native Linux Docker bridge networking and one host nginx instance. It does not configure DNS, firewalls, remote Docker engines, or external proxies. nginx configuration is validated before reload; a failed validation restores the previous site file. A later deployment failure leaves the data volume intact and prints the failed stage. Review migration and rollback limitations below before rerunning setup on an existing service. Never delete the volume to resolve a setup error.
+
+## Manual first deployment
 
 Install Docker Engine and its Compose plugin using the [official Ubuntu guide](https://docs.docker.com/engine/install/ubuntu/) or your distribution's supported instructions. With Docker installed:
 
