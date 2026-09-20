@@ -1,0 +1,39 @@
+{
+  "name": "smallbin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun src/dev.ts",
+    "start": "NODE_ENV=production bun dist/index.js",
+    "build": "bun run build.ts",
+    "test": "bun test tests/crypto tests/server tests/client tests/components tests/deployment tests/http",
+    "test:coverage": "bun test --coverage --coverage-reporter=text --coverage-reporter=lcov tests/crypto tests/server tests/client tests/components tests/deployment tests/http",
+    "test:e2e": "bun test --timeout 180000 tests/e2e",
+    "test:deployment": "bun scripts/deployment-smoke.ts",
+    "db:generate": "bunx --bun drizzle-kit generate",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2",
+    "lucide-react": "^1",
+    "qrcode": "^1.5.4",
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
+    "@types/bun": "latest",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "drizzle-kit": "^0.31.10",
+    "happy-dom": "^20.14.0",
+    "jsqr": "^1.4.0"
+  },
+  "peerDependencies": {
+    "typescript": "^7"
+  }
+}

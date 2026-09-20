@@ -1,0 +1,85 @@
+# Install into nginx's http context (for example /etc/nginx/conf.d/smallbin.conf).
+# Replace every bin.example.com occurrence. Obtain the certificate first using
+# nginx-http.conf.template. No third-party proxy/CDN is assumed by this template.
+map $upstream_http_content_security_policy $smallbin_csp {
+    "" "default-src 'none'; base-uri 'none'; frame-ancestors 'none'";
+    default $upstream_http_content_security_policy;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name bin.example.com;
+    server_tokens off;
+    access_log off;
+    error_log /dev/null crit;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+        default_type text/plain;
+    }
+
+    location / {
+        return 308 https://bin.example.com$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name bin.example.com;
+    ssl_certificate /etc/letsencrypt/live/bin.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/bin.example.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_tickets off;
+    server_tokens off;
+
+    # Even nginx errors can otherwise retain a client IP and bin URL.
+    access_log off;
+    error_log /dev/null crit;
+
+    # Includes room for 100 MB of file bytes, 1 MB of text, and bounded metadata.
+    # The application enforces its exact limit while consuming the request.
+    client_max_body_size 102m;
+    client_body_timeout 120s;
+    client_header_timeout 15s;
+    send_timeout 120s;
+
+    # nginx owns these headers, including responses it generates itself.
+    proxy_hide_header Cache-Control;
+    proxy_hide_header Referrer-Policy;
+    proxy_hide_header X-Content-Type-Options;
+    proxy_hide_header Content-Security-Policy;
+    proxy_hide_header Strict-Transport-Security;
+    add_header Cache-Control "no-store" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Content-Security-Policy $smallbin_csp always;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    # Readiness is for the local operator and Docker, not a public endpoint.
+    location = /healthz {
+        return 404;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:3210;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Connection "";
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # Overwrite client-supplied values. Bun trusts only configured proxy peers.
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Real-IP "";
+        proxy_set_header Forwarded "";
+
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_max_temp_file_size 0;
+        proxy_cache off;
+        proxy_next_upstream off;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 120s;
+        proxy_read_timeout 130s;
+    }
+}

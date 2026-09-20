@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+  BUN_VERSION: "1.4.2"
+
+jobs:
+  tests:
+    name: Bun and browser tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Unit, integration, component, and configuration tests
+        run: bun run test:coverage
+      - name: Build production assets and server
+        run: bun run build
+      - name: Install Chromium and system dependencies
+        run: bunx --bun playwright install --with-deps chromium
+      - name: Browser and production startup tests
+        run: bun run test:e2e
+      - name: Save coverage and browser screenshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-reports
+          path: |
+            coverage/lcov.info
+            test-results/*.png
+          if-no-files-found: warn
+          retention-days: 7
+
+  deployment:
+    name: Docker and nginx tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PUBLIC_ORIGIN: https://bin.example.test
+      SMALLBIN_IMAGE: smallbin:ci
+      SMALLBIN_NGINX_IMAGE: nginx:1.28-alpine
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+      - name: Build application image
+        run: docker compose build
+      - name: Pull nginx test image
+        run: docker pull "$SMALLBIN_NGINX_IMAGE"
+      - name: Test containers, persistence, nginx, and maximum-size uploads
+        env:
+          SMALLBIN_DOCKER_SMOKE: "1"
+        run: bun run test:deployment

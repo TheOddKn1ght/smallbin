@@ -1,0 +1,19 @@
+# Install into nginx's http context (for example /etc/nginx/conf.d/smallbin.conf).
+# Replace bin.example.com before use. This bootstrap config only serves ACME.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name bin.example.com;
+    server_tokens off;
+    access_log off;
+    error_log /dev/null crit;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+        default_type text/plain;
+    }
+
+    location / {
+        return 404;
+    }
+}

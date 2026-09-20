@@ -1,0 +1,3 @@
+[install]
+# Only resolve packages published at least 14 days ago (seconds).
+minimumReleaseAge = 1209600

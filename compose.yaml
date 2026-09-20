@@ -1,0 +1,34 @@
+name: smallbin
+
+services:
+  smallbin:
+    image: ${SMALLBIN_IMAGE:-smallbin:local}
+    build:
+      context: .
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:${PORT:-3210}:3210"
+    environment:
+      NODE_ENV: production
+      PORT: "3210"
+      HOST: 0.0.0.0
+      DATA_DIR: /data
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?Set PUBLIC_ORIGIN in .env}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      MAX_STORAGE_BYTES: ${MAX_STORAGE_BYTES:-10000000000}
+      UPLOAD_TIMEOUT_MS: ${UPLOAD_TIMEOUT_MS:-120000}
+      DOWNLOAD_TIMEOUT_MS: ${DOWNLOAD_TIMEOUT_MS:-120000}
+    volumes:
+      - smallbin-data:/data
+    tmpfs:
+      - /tmp:size=67108864,mode=1777
+    stop_grace_period: 30s
+
+volumes:
+  smallbin-data:
