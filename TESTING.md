@@ -37,7 +37,7 @@ PLAYWRIGHT_BROWSERS_PATH=/tmp/smallbin-playwright bunx --bun playwright install 
 PLAYWRIGHT_BROWSERS_PATH=/tmp/smallbin-playwright bun run test:e2e
 ```
 
-The suite starts isolated localhost servers with temporary storage and the real production frontend. It checks encryption/decryption, clipboard and decoded QR contents, missing/wrong keys, tampering, expiry, upload cancellation/retry, keyboard interaction, narrow layouts, and a real 100 MB attachment plus 1 MB of text. It inspects requests, cookies, browser storage, and server files for unintended plaintext/key retention. Screenshots are saved to `test-results/smallbin-desktop.png` and `test-results/smallbin-mobile.png`; review them visually when changing the design.
+The suite starts isolated localhost servers with temporary storage and the real production frontend. It checks encryption/decryption, clipboard and decoded QR contents, missing/wrong keys, tampering, expiry, upload cancellation/retry, keyboard interaction, narrow layouts, and files totaling 100 MB plus a separate 1 MB of text. It inspects requests, cookies, browser storage, and server files for unintended plaintext/key retention. Screenshots are saved to `test-results/smallbin-desktop.png` and `test-results/smallbin-mobile.png`; review them visually when changing the design.
 
 ## Docker and nginx smoke test
 
@@ -49,7 +49,7 @@ docker pull nginx:1.28-alpine
 SMALLBIN_DOCKER_SMOKE=1 SMALLBIN_IMAGE=smallbin:local SMALLBIN_NGINX_IMAGE=nginx:1.28-alpine bun run test:deployment
 ```
 
-The script verifies migration/readiness startup, non-root runtime, encrypted upload/download, preservation across restart, nginx template syntax, and a real maximum-size combined bin through nginx with a decrypted attachment SHA-256 comparison. It also checks an upload above nginx's 102 MiB limit returns nginx's own `413`, privacy headers on `404`/`413`/`429`/`502`, hidden public readiness, and absence of synthetic keys, text, filenames, bin IDs, and client/proxy IPs in container logs. Its fresh private network trusts only the disposable nginx IP; changing forged forwarding headers must not bypass the ten-attempt creation limit.
+The script verifies migration/readiness startup, non-root runtime, encrypted upload/download, preservation across restart, nginx template syntax, and two files totaling exactly 100 MB plus 1 MB of text through nginx. It checks each decrypted file's SHA-256, filename, MIME type, size, and position. It also checks an upload above nginx's 102 MiB limit returns nginx's own `413`, privacy headers on `404`/`413`/`429`/`502`, hidden public readiness, and absence of synthetic keys, text, all attachment filenames, small attachment plaintext, bin IDs, and client/proxy IPs in container logs. Its fresh private network trusts only the disposable nginx IP; changing forged forwarding headers must not bypass the ten-attempt creation limit.
 
 The suite sends about 100 MB of valid encrypted content and an oversized 102 MiB request, so allow memory/disk space and local transfer time. It uses the checked-in HTTPS template through a local HTTP-only adaptation for the disposable proxy; production certificate issuance and renewal still require the checks in [DEPLOYMENT.md](DEPLOYMENT.md).
 
@@ -61,13 +61,13 @@ All containers bind only to randomly assigned localhost ports. Resource names ha
 
 | Requirement | Automated evidence |
 | --- | --- |
-| Text-only, file-only, combined content, Unicode, empty files, 100 MB/1 MB limits | `tests/crypto/crypto.test.ts`, `tests/components/smallbin.test.tsx`, `tests/server/app.test.ts`; real maximum browser transfer in `tests/e2e/browser.test.ts`. |
-| Fresh AES-GCM keys/nonces; authenticated version/metadata; malformed keys, corruption, lengths, and UTF-8 fail closed | `tests/crypto/crypto.test.ts`; recipient failures in `tests/components/smallbin.test.tsx` and `tests/e2e/browser.test.ts`. |
+| Text-only, one or multiple files, combined content, Unicode, empty files, 100 MB total attachments and separate 1 MB text limit | `tests/crypto/crypto.test.ts`, `tests/components/smallbin.test.tsx`, `tests/server/app.test.ts`; real maximum browser transfer in `tests/e2e/browser.test.ts`. |
+| Fresh AES-GCM keys/nonces; v2 multiple-file metadata and v1 read compatibility; malformed keys, corruption, lengths, and UTF-8 fail closed | `tests/crypto/crypto.test.ts`; recipient failures in `tests/components/smallbin.test.tsx` and `tests/e2e/browser.test.ts`. |
 | Fragment keys, ciphertext-only API/storage, no cookies, persistent browser storage, or external requests | `tests/client/api.test.ts`, `tests/server/app.test.ts`, `tests/e2e/browser.test.ts`. |
 | Six expiry choices, five-minute default, expiry begins at upload completion, unavailable response, cleanup | `tests/components/smallbin.test.tsx`, `tests/server/app.test.ts`, `tests/server/storage.test.ts`; browser expiry in `tests/e2e/browser.test.ts`. |
 | Encryption/upload states, progress, cancellation, retained draft, recoverable failures | `tests/client/api.test.ts`, `tests/components/smallbin.test.tsx`, `tests/e2e/browser.test.ts`. |
 | Copyable complete link, local QR generation, recipient text copy | `tests/components/smallbin.test.tsx`; clipboard and QR decoding in `tests/e2e/browser.test.ts`. |
-| Literal hostile text, explicit attachment download, safe filenames, no active previews | `tests/client/api.test.ts`, `tests/components/smallbin.test.tsx`, `tests/e2e/browser.test.ts`. |
+| Literal hostile text, individual attachment downloads, preserved file order, safe filenames, no active previews | `tests/client/api.test.ts`, `tests/components/smallbin.test.tsx`, `tests/e2e/browser.test.ts`. |
 | Mobile layout, keyboard access, English interface, privacy explanation | `tests/components/smallbin.test.tsx`, `tests/e2e/browser.test.ts`; manual review of generated desktop/mobile screenshots. |
 | Drizzle migrations, startup failure handling, single-instance enforcement, SQLite persistence/recovery | `tests/server/storage.test.ts`, `tests/server/app.test.ts`; image startup/restart additionally covered by the unrun deployment script. |
 | Streaming limits, storage reservations, file/DB failures, aborted uploads, orphan reconciliation | `tests/server/app.test.ts`, `tests/server/storage.test.ts`. |

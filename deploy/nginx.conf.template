@@ -38,7 +38,7 @@ server {
     access_log off;
     error_log /dev/null crit;
 
-    # Includes room for 100 MB of file bytes, 1 MB of text, and bounded metadata.
+    # Includes room for 100 MB across all attachments, 1 MB of text, and bounded metadata.
     # The application enforces its exact limit while consuming the request.
     client_max_body_size 102m;
     client_body_timeout 120s;

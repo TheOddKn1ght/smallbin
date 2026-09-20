@@ -23,7 +23,7 @@ function services(overrides: Partial<ClientServices> = {}): ClientServices {
   return {
     config: mock(async () => defaultConfig),
     encrypt: mock(async () => ({ payload: new Uint8Array([10, 20, 30]), key })),
-    decrypt: mock(async () => ({ text: "Hello, privately.", file: null })),
+    decrypt: mock(async () => ({ text: "Hello, privately.", files: [] })),
     upload: mock(async () => ({ id, expiresAt })),
     retrieve: mock(async () => ({ payload: new Uint8Array([10, 20, 30]).buffer, expiresAt })),
     ...overrides,
@@ -73,7 +73,7 @@ describe("creation form", () => {
     await waitFor(() => expect(view.getByLabelText("Private share link")).toBeTruthy());
     const link = `https://smallbin.test/b/${id}#${key}`;
     expect((view.getByLabelText("Private share link") as HTMLInputElement).value).toBe(link);
-    expect(service.encrypt).toHaveBeenCalledWith({ text: "a private note", file });
+    expect(service.encrypt).toHaveBeenCalledWith({ text: "a private note", files: [file] });
     expect(service.upload).toHaveBeenCalledWith(new Uint8Array([10, 20, 30]), 3600, expect.any(AbortSignal), expect.any(Function));
     fireEvent.click(view.getByRole("button", { name: "Copy link" }));
     await waitFor(() => expect(clipboard).toHaveBeenCalledWith(link));
@@ -85,7 +85,7 @@ describe("creation form", () => {
     expect((view.getByLabelText(/Your message/) as HTMLTextAreaElement).value).toBe("");
     expect(view.queryByText("notes.txt")).toBeNull();
   });
-  test("validates UTF-8 bytes, oversized files, and multiple file selection", async () => {
+  test("validates UTF-8 bytes and oversized files while accepting multiple file selection", async () => {
     const service = services(); const view = render(<CreateBin services={service} />); await ready(view);
     const text = "😺".repeat(250_001);
     fireEvent.change(view.getByLabelText(/Your message/), { target: { value: text } });
@@ -96,24 +96,27 @@ describe("creation form", () => {
     fireEvent.change(view.getByLabelText(/Attachment/), { target: { files: [oversized] } });
     expect(view.getByRole("alert").textContent).toContain("100 MB");
     fireEvent.change(view.getByLabelText(/Attachment/), { target: { files: [new File([], "a"), new File([], "b")] } });
-    expect(view.getByRole("alert").textContent).toContain("one file");
+    expect(view.queryByRole("alert")).toBeNull();
+    expect(view.getAllByRole("listitem")).toHaveLength(2);
   });
   test("accepts zero-byte files alone and supports removal and drop", async () => {
     const service = services(); const view = render(<CreateBin services={service} />); await ready(view);
     const file = new File([], "empty.txt");
-    fireEvent.drop(view.getByRole("button", { name: /Drop a file/ }).parentElement!, { dataTransfer: { files: [file] } });
+    fireEvent.drop(view.getByRole("button", { name: /Drop files/ }).parentElement!, { dataTransfer: { files: [file] } });
     expect(view.getByText("empty.txt")).toBeTruthy();
-    fireEvent.click(view.getByRole("button", { name: "Remove attachment" }));
+    fireEvent.click(view.getByRole("button", { name: "Remove empty.txt, attachment 1" }));
     expect(view.queryByText("empty.txt")).toBeNull();
     fireEvent.change(view.getByLabelText(/Attachment/), { target: { files: [file] } });
     fireEvent.click(view.getByRole("button", { name: "Create private link" }));
-    await waitFor(() => expect(service.encrypt).toHaveBeenCalledWith({ text: "", file }));
+    await waitFor(() => expect(service.encrypt).toHaveBeenCalledWith({ text: "", files: [file] }));
   });
   test("cancellation during encryption prevents a late upload and keeps the draft", async () => {
     let resolveEncryption!: (value: Awaited<ReturnType<ClientServices["encrypt"]>>) => void;
     const service = services({ encrypt: mock(() => new Promise<Awaited<ReturnType<ClientServices["encrypt"]>>>(resolve => { resolveEncryption = resolve; })) });
     const view = render(<CreateBin services={service} />); await ready(view);
     fireEvent.change(view.getByLabelText(/Your message/), { target: { value: "keep this draft" } });
+    const draftFiles = [new File(["a"], "first.txt"), new File(["b"], "second.txt")];
+    fireEvent.change(view.getByLabelText(/Attachment/), { target: { files: draftFiles } });
     fireEvent.click(view.getByRole("button", { name: "Create private link" }));
     expect(view.getByRole("button", { name: "Encrypting…" })).toBeTruthy();
     fireEvent.click(view.getByRole("button", { name: "Cancel" }));
@@ -121,6 +124,8 @@ describe("creation form", () => {
     expect(service.upload).not.toHaveBeenCalled();
     expect((view.getByLabelText(/Your message/) as HTMLTextAreaElement).value).toBe("keep this draft");
     expect(view.getByRole("status").textContent).toContain("Cancelled");
+    expect(view.getAllByRole("listitem")).toHaveLength(2);
+    expect(service.encrypt).toHaveBeenCalledWith({ text: "keep this draft", files: draftFiles });
   });
   test("shows upload progress and aborts an active upload", async () => {
     let signal: AbortSignal | undefined;
@@ -140,9 +145,12 @@ describe("creation form", () => {
     let tries = 0; const service = services({ upload: mock(async () => { if (!tries++) throw new ClientError("The upload timed out. Please try again."); return { id, expiresAt }; }) });
     const view = render(<CreateBin services={service} />); await ready(view);
     fireEvent.change(view.getByLabelText(/Your message/), { target: { value: "retry me" } });
+    const draftFiles = [new File(["a"], "first.txt"), new File(["b"], "second.txt")];
+    fireEvent.change(view.getByLabelText(/Attachment/), { target: { files: draftFiles } });
     fireEvent.click(view.getByRole("button", { name: "Create private link" }));
     await waitFor(() => expect(view.getByRole("alert").textContent).toContain("timed out"));
     expect((view.getByLabelText(/Your message/) as HTMLTextAreaElement).value).toBe("retry me");
+    expect(view.getAllByRole("listitem")).toHaveLength(2);
     fireEvent.click(view.getByRole("button", { name: "Create private link" }));
     await waitFor(() => expect(view.getByLabelText("Private share link")).toBeTruthy());
   });
@@ -156,11 +164,11 @@ describe("recipient", () => {
   });
   test("renders hostile text literally, copies text, and exposes attachment only as download", async () => {
     const malicious = '<img src="https://evil.test/pixel" onerror="alert(1)">';
-    const service = services({ decrypt: mock(async () => ({ text: malicious, file: { name: "../../evil.html", type: "text/html", bytes: new Uint8Array([1, 2]) } })) });
+    const service = services({ decrypt: mock(async () => ({ text: malicious, files: [{ name: "../../evil.html", type: "text/html", bytes: new Uint8Array([1, 2]) }] })) });
     const view = render(<ReceiveBin id={id} secret={key} services={service} />);
     await waitFor(() => expect(view.getByText(malicious)).toBeTruthy());
     expect(view.container.querySelector("img, iframe, object, embed")).toBeNull();
-    expect(view.getByRole("button", { name: "Download file" })).toBeTruthy();
+    expect(view.getByRole("button", { name: /^Download/ })).toBeTruthy();
     fireEvent.click(view.getByRole("button", { name: "Copy text" }));
     await waitFor(() => expect(clipboard).toHaveBeenCalledWith(malicious));
     expect(service.retrieve).toHaveBeenCalledWith(id, expect.any(AbortSignal));
@@ -177,7 +185,7 @@ describe("recipient", () => {
     const service = services({ decrypt: mock(async () => { throw new Error("authentication failed"); }) });
     const view = render(<ReceiveBin id={id} secret={key} services={service} />);
     await waitFor(() => expect(view.getByRole("alert").textContent).toContain("couldn’t be decrypted"));
-    expect(view.queryByRole("button", { name: "Download file" })).toBeNull();
+    expect(view.queryByRole("button", { name: /^Download/ })).toBeNull();
   });
 });
 
@@ -215,11 +223,11 @@ test("downloads attachments only on request as octet-stream with a sanitized fil
   URL.revokeObjectURL = revoke;
   dom.HTMLAnchorElement.prototype.click = function () { clickedDownload = this.download; };
   try {
-    const service = services({ decrypt: mock(async () => ({ text: "", file: { name: "../../evil.html", type: "text/html", bytes: new Uint8Array([1, 2, 3]) } })) });
+    const service = services({ decrypt: mock(async () => ({ text: "", files: [{ name: "../../evil.html", type: "text/html", bytes: new Uint8Array([1, 2, 3]) }] })) });
     const view = render(<ReceiveBin id={id} secret={key} services={service} />);
-    await waitFor(() => expect(view.getByRole("button", { name: "Download file" })).toBeTruthy());
+    await waitFor(() => expect(view.getByRole("button", { name: /^Download/ })).toBeTruthy());
     expect(downloadedBlob).toBeUndefined();
-    fireEvent.click(view.getByRole("button", { name: "Download file" }));
+    fireEvent.click(view.getByRole("button", { name: /^Download/ }));
     expect(downloadedBlob?.type).toBe("application/octet-stream");
     expect(clickedDownload).toBe("_.._evil.html");
     expect([...new Uint8Array(await downloadedBlob!.arrayBuffer())]).toEqual([1, 2, 3]);
@@ -255,4 +263,106 @@ test("fragment changes update the recipient and skip navigation preserves the se
   expect(view.getByRole("alert").textContent).toContain("decryption key is missing");
   view.unmount();
   dom.history.replaceState(null, "", "/");
+});
+
+test("multiple selections and drops append; each file can be removed while add remains available", async () => {
+  const service = services();
+  const view = render(<CreateBin services={service} />); await ready(view);
+  const input = view.getByLabelText(/Attachment/) as HTMLInputElement;
+  expect(input.multiple).toBe(true);
+  const first = new File(["a"], "first.txt");
+  const second = new File(["bb"], "second.txt");
+  const third = new File(["ccc"], "third.txt");
+  const fourth = new File(["dddd"], "fourth.txt");
+  fireEvent.change(input, { target: { files: [first, second] } });
+  fireEvent.change(input, { target: { files: [third] } });
+  const add = view.getByRole("button", { name: /Drop more files/ });
+  fireEvent.drop(add.parentElement!, { dataTransfer: { files: [fourth] } });
+  expect(view.getAllByRole("listitem")).toHaveLength(4);
+  expect(view.getByText("10 B / 100 MB total")).toBeTruthy();
+  fireEvent.click(view.getByRole("button", { name: "Remove second.txt, attachment 2" }));
+  expect(view.queryByText("second.txt")).toBeNull();
+  expect(view.getByText("8 B / 100 MB total")).toBeTruthy();
+  expect(view.getByRole("button", { name: /Drop more files/ })).toBeTruthy();
+  fireEvent.click(view.getByRole("button", { name: "Create private link" }));
+  await waitFor(() => expect(service.encrypt).toHaveBeenCalledWith({ text: "", files: [first, third, fourth] }));
+});
+
+test("accepts exactly 100 MB combined, rejects the whole oversized addition, and keeps the 1 MB text budget separate", async () => {
+  const service = services();
+  const view = render(<CreateBin services={service} />); await ready(view);
+  const first = new File([], "first.bin"); Object.defineProperty(first, "size", { value: 60_000_000 });
+  const second = new File([], "second.bin"); Object.defineProperty(second, "size", { value: 40_000_000 });
+  fireEvent.change(view.getByLabelText(/Attachment/), { target: { files: [first, second] } });
+  expect(view.getByText("100 MB / 100 MB total")).toBeTruthy();
+  expect(view.queryByRole("alert")).toBeNull();
+  fireEvent.change(view.getByLabelText(/Attachment/), { target: { files: [new File([], "empty.txt"), new File(["x"], "overflow.txt")] } });
+  expect(view.getByRole("alert").textContent).toContain("100 MB");
+  expect(view.getAllByRole("listitem")).toHaveLength(2);
+  expect(view.queryByText("empty.txt")).toBeNull();
+  expect(view.queryByText("overflow.txt")).toBeNull();
+  expect(service.encrypt).not.toHaveBeenCalled();
+  expect(service.upload).not.toHaveBeenCalled();
+  fireEvent.change(view.getByLabelText(/Your message/), { target: { value: "a".repeat(1_000_000) } });
+  fireEvent.click(view.getByRole("button", { name: "Create private link" }));
+  await waitFor(() => expect(service.encrypt).toHaveBeenCalledWith({ text: "a".repeat(1_000_000), files: [first, second] }));
+});
+
+test("duplicate filenames remain separate attachments and removing one preserves the other", async () => {
+  const service = services();
+  const view = render(<CreateBin services={service} />); await ready(view);
+  const first = new File(["first"], "same.txt");
+  const second = new File(["second"], "same.txt");
+  fireEvent.change(view.getByLabelText(/Attachment/), { target: { files: [first, second] } });
+  expect(view.getAllByText("same.txt")).toHaveLength(2);
+  fireEvent.click(view.getByRole("button", { name: "Remove same.txt, attachment 1" }));
+  expect(view.getAllByText("same.txt")).toHaveLength(1);
+  fireEvent.click(view.getByRole("button", { name: "Create private link" }));
+  await waitFor(() => expect(service.encrypt).toHaveBeenCalledWith({ text: "", files: [second] }));
+});
+
+test("metadata rejection leaves previously selected attachments intact", async () => {
+  const service = services();
+  const view = render(<CreateBin services={service} />); await ready(view);
+  const first = new File(["keep"], "keep.txt");
+  fireEvent.change(view.getByLabelText(/Attachment/), { target: { files: [first] } });
+  const excessive = Array.from({ length: 10 }, (_, i) => new File([], `${i}-${"a".repeat(2_000)}.txt`));
+  fireEvent.drop(view.getByRole("button", { name: /Drop more files/ }).parentElement!, { dataTransfer: { files: excessive } });
+  expect(view.getByRole("alert").textContent).toContain("metadata");
+  expect(view.getAllByRole("listitem")).toHaveLength(1);
+  expect(view.getByText("keep.txt")).toBeTruthy();
+  expect(service.encrypt).not.toHaveBeenCalled();
+});
+
+test("duplicate-name recipient attachments download individually with their own bytes", async () => {
+  const createUrl = URL.createObjectURL;
+  const revokeUrl = URL.revokeObjectURL;
+  const click = dom.HTMLAnchorElement.prototype.click;
+  const blobs: Blob[] = [];
+  const names: string[] = [];
+  URL.createObjectURL = (blob: Blob) => { blobs.push(blob); return `blob:attachment-${blobs.length}`; };
+  URL.revokeObjectURL = mock(() => {});
+  dom.HTMLAnchorElement.prototype.click = function () { names.push(this.download); };
+  try {
+    const files = [
+      { name: "../same.html", type: "text/html", bytes: new Uint8Array([11]) },
+      { name: "../same.html", type: "text/html", bytes: new Uint8Array([22, 33]) },
+    ];
+    const service = services({ decrypt: mock(async () => ({ text: "", files })) });
+    const view = render(<ReceiveBin id={id} secret={key} services={service} />);
+    await waitFor(() => expect(view.getAllByRole("button", { name: /^Download/ })).toHaveLength(2));
+    expect(blobs).toHaveLength(0);
+    fireEvent.click(view.getByRole("button", { name: "Download ../same.html, attachment 2" }));
+    expect([...new Uint8Array(await blobs[0]!.arrayBuffer())]).toEqual([22, 33]);
+    fireEvent.click(view.getByRole("button", { name: "Download ../same.html, attachment 1" }));
+    expect([...new Uint8Array(await blobs[1]!.arrayBuffer())]).toEqual([11]);
+    expect(blobs.map(blob => blob.type)).toEqual(["application/octet-stream", "application/octet-stream"]);
+    expect(names).toEqual(["_same.html", "_same.html"]);
+    expect(view.queryByRole("button", { name: /Download all|ZIP/ })).toBeNull();
+    view.unmount();
+  } finally {
+    URL.createObjectURL = createUrl;
+    URL.revokeObjectURL = revokeUrl;
+    dom.HTMLAnchorElement.prototype.click = click;
+  }
 });

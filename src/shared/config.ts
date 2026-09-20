@@ -1,4 +1,5 @@
 export const LIMITS = Object.freeze({
+  // Combined attachment bytes per bin; keep the public field name for older clients.
   maxFileBytes: 100_000_000,
   maxTextBytes: 1_000_000,
   maxMetadataBytes: 16_384,

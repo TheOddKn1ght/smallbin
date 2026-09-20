@@ -108,11 +108,11 @@ sudo systemctl enable --now certbot.timer
 sudo certbot renew --dry-run
 ```
 
-The template disables request/response buffering, proxy caching, request retries, and request-bearing access/error logs. Its `102m` request limit accommodates the 100 MB file limit plus 1 MB of text and encryption metadata; the app independently validates its precise ciphertext limit. nginx timeouts measure inactivity, while app upload/download deadlines also bound transfer duration. If your users need slower transfers, raise the appropriate app timeout and nginx timeout together, then recreate the app and reload nginx.
+The template disables request/response buffering, proxy caching, request retries, and request-bearing access/error logs. Its `102m` request limit accommodates 100 MB combined across all attachments, a separate 1 MB of text, and encryption metadata; the app independently validates its precise ciphertext limit. nginx timeouts measure inactivity, while app upload/download deadlines also bound transfer duration. If your users need slower transfers, raise the appropriate app timeout and nginx timeout together, then recreate the app and reload nginx.
 
 nginx replaces the app's cache/referrer/content-type headers once and preserves its CSP through a mapped value. nginx-generated errors receive the same privacy headers and a restrictive fallback CSP. HSTS is enabled for this hostname only. The public `/healthz` endpoint is hidden; use the loopback endpoint for operations.
 
-Open the HTTPS site in a browser and create a text-and-file bin, open the full link in a separate browser session, and confirm the downloaded file. Check that the expiry time and missing-key messages behave as expected. The URL fragment holds the key and must not be removed when sharing.
+Open the HTTPS site in a browser and create a bin with text and several files, open the full link in a separate browser session, and confirm each downloaded file and its filename. Check that the expiry time and missing-key messages behave as expected. The URL fragment holds the key and must not be removed when sharing.
 
 ## Configuration and storage
 
@@ -159,6 +159,8 @@ docker compose ps
 ```
 
 Committed Drizzle migrations apply automatically on startup, once each. Do not use `drizzle-kit push` or generate migrations on the production host. Review schema changes before upgrading. Returning to the previous image is safe only when it supports the migrated schema; there are no automatic down migrations. For an incompatible rollback, stop service and plan an explicit reset of disposable bin data rather than pointing old code at an unsupported database. Tell users that resetting storage invalidates existing links.
+
+The current browser writes encrypted envelope v2 for multiple attachments and still reads existing v1 bins. The ciphertext storage/API size limit is unchanged. Older frontend code cannot open new v2 bins, so deploy the frontend assets and server together from one image; do not reuse an older frontend asset directory with a new server. Ask users with already-open tabs to reload after upgrading. A rollback to a version that only reads v1 leaves newly created v2 links unreadable until a compatible frontend is restored; retain the compatible image while those bins remain available.
 
 Stop without deleting data:
 

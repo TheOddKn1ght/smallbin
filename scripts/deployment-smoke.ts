@@ -58,8 +58,11 @@ function privacyHeaders(response: Response): void {
   assert.equal(response.headers.get("set-cookie"), null);
 }
 
-async function createBin(url: string, text: string, file = new File(["private attachment\n"], "private-name.txt", { type: "text/plain" })) {
-  const input = { text, file };
+async function createBin(url: string, text: string, files: readonly File[] = [
+  new File([`private first attachment ${prefix}\n`], "private-first.txt", { type: "text/plain" }),
+  new File([`private second attachment ${prefix}\n`], "private-second.bin", { type: "application/octet-stream" }),
+]) {
+  const input = { text, files };
   const encrypted = await encryptBin(input);
   const response = await fetch(`${url}/api/bins?ttlSeconds=300`, {
     method: "POST", headers: { Origin: origin, "Content-Type": "application/octet-stream" }, body: encrypted.payload,
@@ -68,7 +71,13 @@ async function createBin(url: string, text: string, file = new File(["private at
   privacyHeaders(response);
   const result = await response.json() as { id: string; expiresAt: string };
   assert.ok(result.id && Date.parse(result.expiresAt) > Date.now());
-  for (const marker of [result.id, encrypted.key, input.text.slice(0, 100), input.file.name]) sensitiveMarkers.add(marker);
+  for (const marker of [result.id, encrypted.key, input.text.slice(0, 100), ...input.files.map(file => file.name)]) sensitiveMarkers.add(marker);
+  for (const file of input.files) {
+    if (file.size > 0 && file.size <= 4096) {
+      const marker = (await file.text()).slice(0, 100).trim();
+      if (marker) sensitiveMarkers.add(marker);
+    }
+  }
   return { ...result, ...encrypted, input };
 }
 
@@ -81,12 +90,16 @@ async function verifyBin(url: string, bin: Awaited<ReturnType<typeof createBin>>
   assert.deepEqual(bytes, bin.payload);
   const decrypted = await decryptBin(bytes, bin.key);
   assert.equal(decrypted.text, bin.input.text);
-  assert.equal(decrypted.file?.name, bin.input.file.name);
-  assert.equal(decrypted.file?.type, bin.input.file.type);
-  assert.equal(decrypted.file?.bytes.byteLength, bin.input.file.size);
-  const expectedHash = new Bun.CryptoHasher("sha256").update(await bin.input.file.arrayBuffer()).digest("hex");
-  const actualHash = new Bun.CryptoHasher("sha256").update(decrypted.file!.bytes).digest("hex");
-  assert.equal(actualHash, expectedHash, "Decrypted attachment SHA-256 must match the original");
+  assert.equal(decrypted.files.length, bin.input.files.length);
+  for (const [index, original] of bin.input.files.entries()) {
+    const received = decrypted.files[index]!;
+    assert.equal(received.name, original.name, "Attachment names and order must be preserved");
+    assert.equal(received.type, original.type);
+    assert.equal(received.bytes.byteLength, original.size);
+    const expectedHash = new Bun.CryptoHasher("sha256").update(await original.arrayBuffer()).digest("hex");
+    const actualHash = new Bun.CryptoHasher("sha256").update(received.bytes).digest("hex");
+    assert.equal(actualHash, expectedHash, `Decrypted attachment ${index + 1} SHA-256 must match the original`);
+  }
 }
 
 async function maximumRoundTrip(url: string): Promise<void> {
@@ -94,8 +107,13 @@ async function maximumRoundTrip(url: string): Promise<void> {
   for (let index = 0; index < bytes.length; index += 1) bytes[index] = index % 251;
   const marker = `maximum synthetic plaintext ${prefix} `;
   const text = marker + "x".repeat(LIMITS.maxTextBytes - marker.length);
-  const file = new File([bytes], `${prefix}-maximum-private.bin`, { type: "application/octet-stream" });
-  const bin = await createBin(url, text, file);
+  const firstSize = 39_000_000;
+  const files = [
+    new File([bytes.subarray(0, firstSize)], `${prefix}-maximum-first.bin`, { type: "application/octet-stream" }),
+    new File([bytes.subarray(firstSize)], `${prefix}-maximum-second.bin`, { type: "application/octet-stream" }),
+  ];
+  assert.equal(files.reduce((total, file) => total + file.size, 0), LIMITS.maxFileBytes);
+  const bin = await createBin(url, text, files);
   await verifyBin(url, bin);
 }
 
@@ -197,7 +215,7 @@ try {
   await maximumRoundTrip(proxyUrl);
   await oversizedRequest(proxyUrl);
   await spoofedForwardingIsThrottled(proxyUrl);
-  console.log("PASS: 100 MB attachment plus 1 MB text decrypts with matching SHA-256 through nginx; nginx 413 headers; forwarded-IP spoofing cannot bypass throttling");
+  console.log("PASS: two attachments totaling 100 MB plus 1 MB text decrypt with matching names, order, and SHA-256 through nginx; nginx 413 headers; forwarded-IP spoofing cannot bypass throttling");
   const hiddenHealth = await fetch(`${proxyUrl}/healthz`);
   assert.equal(hiddenHealth.status, 404);
   privacyHeaders(hiddenHealth);

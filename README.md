@@ -2,12 +2,14 @@
 
 Private, temporary text and file sharing. No account required. Text, filenames, and file bytes are encrypted in your browser; the decryption key stays in the share link's URL fragment.
 
-- Share text, one file, or both; files up to 100 MB and text up to 1 MB.
+- Share text, multiple files, or both; attachments total up to 100 MB, with a separate 1 MB text limit.
 - Choose expiry from 5 minutes to 12 hours.
 - Copy a link or a locally generated QR code.
 - Self-host with Bun, Drizzle, SQLite, and encrypted files on local disk.
 
 Anyone with the complete link can decrypt a bin. The server still sees ciphertext sizes and request timing. Browser history and downloaded copies can outlive expiry. This does not protect against a compromised browser or a server that changes the delivered JavaScript.
+
+New bins use encrypted format v2 for multiple attachments. Existing v1 links remain readable in the current app; deploy frontend and server from the same image when upgrading.
 
 ## Development
 

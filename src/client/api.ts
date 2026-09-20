@@ -25,7 +25,7 @@ function validDate(value: unknown): value is string {
 
 export function responseMessage(status: number): string {
   if (status === 404 || status === 410) return "This bin is unavailable. It may have expired, or the link may be incorrect.";
-  if (status === 413) return "This bin is too large. Use a smaller file or less text.";
+  if (status === 413) return "This bin is too large. Use fewer or smaller files, or less text.";
   if (status === 429) return "Too many requests. Please wait a little before trying again.";
   if (status === 503 || status === 507) return "Smallbin is at capacity. Please try again later.";
   return "We couldn’t complete that request. Please try again.";

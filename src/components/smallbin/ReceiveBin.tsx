@@ -6,7 +6,7 @@ import { CopyButton, Expiry } from "./ShareResult";
 
 interface OpenBin {
   text: string;
-  file: { name: string; type: string; bytes: Uint8Array } | null;
+  files: { name: string; type: string; bytes: Uint8Array }[];
   expiresAt: string;
 }
 
@@ -45,7 +45,7 @@ export function ReceiveBin({ id, secret, services = clientServices }: { id: stri
       : !bin ? <div className="recipient-state" role="status"><span className="spinner" /><h2>{phase}</h2><p>Your decryption key stays in this browser.</p></div>
       : <div className="received-content">
         {bin.text && <section className="message-section"><div className="label-row"><h2 className="field-label">Message</h2><CopyButton value={bin.text} label="Copy text" /></div><pre className="received-text" tabIndex={0}>{bin.text}</pre></section>}
-        {bin.file && <section className="received-attachment"><span className="file-icon"><FileIcon size={22} strokeWidth={1.5} /></span><div className="file-details"><span className="file-name" title={bin.file.name}>{bin.file.name}</span><span>{formatBytes(bin.file.bytes.byteLength)}</span></div><button type="button" className="button button-outline" onClick={() => { if (bin.file) releases.current.push(downloadFile(bin.file)); }}><Download size={16} />Download file</button></section>}
+        {bin.files.map((file, index) => <section className="received-attachment" key={`${index}-${file.name}`} aria-label={`Attachment ${index + 1}: ${file.name}`}><span className="file-icon"><FileIcon size={22} strokeWidth={1.5} /></span><div className="file-details"><span className="file-name" title={file.name}>{file.name}</span><span>{formatBytes(file.bytes.byteLength)}</span></div><button type="button" className="button button-outline" aria-label={`Download ${file.name}, attachment ${index + 1}`} onClick={() => releases.current.push(downloadFile(file))}><Download size={16} />Download file</button></section>)}
         <div className="expiry-line"><span>Available until <Expiry value={bin.expiresAt} /></span></div>
         <p className="recipient-note">Expiry removes access on the server. Copies already opened or downloaded stay with their recipients.</p>
       </div>}

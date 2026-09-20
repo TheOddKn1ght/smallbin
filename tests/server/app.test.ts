@@ -56,7 +56,8 @@ describe("API and privacy", () => {
     const text = "private secret π 🥷";
     const filename = "confidential-report.txt";
     const file = new File(["top secret file bytes"], filename, { type: "text/plain" });
-    const encrypted = await encryptBin({ text, file });
+    const second = new File(["second private attachment"], "private-second.bin", { type: "application/octet-stream" });
+    const encrypted = await encryptBin({ text, files: [file, second] });
     const result = await create(app, encrypted.payload);
     expect(result.id).toMatch(/^[A-Za-z0-9_-]{22}$/);
     const response = await app.handle(request(`/api/bins/${result.id}`));
@@ -68,10 +69,11 @@ describe("API and privacy", () => {
     expect(stored).toEqual(encrypted.payload);
     const decoded = await decryptBin(stored, encrypted.key);
     expect(decoded.text).toBe(text);
-    expect(decoded.file?.name).toBe(filename);
+    expect(decoded.files.map(file => file.name)).toEqual([filename, second.name]);
+    expect(new TextDecoder().decode(decoded.files[1]!.bytes)).toBe("second private attachment");
     for (const suffix of ["smallbin.sqlite", "smallbin.sqlite-wal", `blobs/${result.id}.bin`]) {
       const contents = await Bun.file(join(dataDir, suffix)).text();
-      for (const secret of [text, filename, encrypted.key, "top secret file bytes"]) expect(contents.includes(secret)).toBe(false);
+      for (const secret of [text, filename, second.name, encrypted.key, "top secret file bytes", "second private attachment"]) expect(contents.includes(secret)).toBe(false);
     }
     const db = new Database(join(dataDir, "smallbin.sqlite"), { readonly: true });
     expect((db.query("PRAGMA table_info(bins)").all() as { name: string }[]).map(row => row.name)).toEqual(["id", "created_at", "expires_at", "size"]);

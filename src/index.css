@@ -44,7 +44,9 @@ textarea::placeholder { color: #92929b; }
 .drop-button svg { color: var(--muted); flex-shrink: 0; }
 .drop-button:hover:not(:disabled) { background: var(--surface); }
 .underlined { text-decoration: underline; text-underline-offset: 3px; }
-.has-file, .received-attachment { display: flex; align-items: center; gap: 14px; padding: 16px; }
+.attachment-row, .received-attachment { display: flex; align-items: center; gap: 14px; padding: 16px; }
+.attachment-list { list-style: none; margin: 0; padding: 0; border-bottom: 1px solid var(--line); }
+.attachment-row + .attachment-row { border-top: 1px solid var(--line); }
 .file-icon { display: flex; align-items: center; color: var(--muted); flex-shrink: 0; }
 .file-details { display: flex; flex-direction: column; gap: 5px; min-width: 0; flex: 1; }
 .file-name { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

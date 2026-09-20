@@ -57,23 +57,26 @@ afterEach(async () => {
 });
 afterAll(async () => { await browser?.close(); });
 
-async function share(text: string, file?: { path: string }) {
+async function share(text: string, files: string[] = []) {
   await page.getByLabel("Your message").fill(text);
-  if (file) await page.locator("#bin-file").setInputFiles(file.path);
+  if (files.length) await page.locator("#bin-file").setInputFiles(files);
   await page.getByRole("button", { name: "Create private link", exact: true }).click();
   const link = page.getByLabel("Private share link");
   await browserExpect(link).toBeVisible({ timeout: 120_000 });
   return link.inputValue();
 }
 
-test("real encrypted text + file sharing, clipboard, QR, and zero plaintext transmission", async () => {
+test("real encrypted text + multiple files, clipboard, QR, and zero plaintext transmission", async () => {
   const text = "SECRET-SENTINEL-αβ-<script>window.compromised=true</script>";
   const filename = "private-financial-note.txt";
   const fileText = "ATTACHMENT-SENTINEL-ONLY-RECIPIENTS-SEE-THIS";
   const file = join(root, filename); await Bun.write(file, fileText);
   const requests: { url: string; body: Buffer | null }[] = [];
   page.on("request", request => requests.push({ url: request.url(), body: request.postDataBuffer() }));
-  const link = await share(text, { path: file });
+  const secondName = "second-secret.bin";
+  const secondText = "SECOND-FILE-PRIVATE-SENTINEL";
+  const secondPath = join(root, secondName); await Bun.write(secondPath, secondText);
+  const link = await share(text, [file, secondPath]);
   const key = link.split("#")[1]!;
   await page.getByRole("button", { name: "Copy link", exact: true }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(link);
@@ -92,16 +95,19 @@ test("real encrypted text + file sharing, clipboard, QR, and zero plaintext tran
   expect(await page.evaluate(() => (window as unknown as { compromised?: boolean }).compromised)).toBeUndefined();
   await page.getByRole("button", { name: "Copy text", exact: true }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(text);
-  const downloading = page.waitForEvent("download");
-  await page.getByRole("button", { name: "Download file", exact: true }).click();
-  const download = await downloading;
-  expect(download.suggestedFilename()).toBe(filename);
-  expect(await Bun.file((await download.path())!).text()).toBe(fileText);
+  await browserExpect(page.locator(".received-attachment")).toHaveCount(2);
+  for (const [name, contents] of [[filename, fileText], [secondName, secondText]] as const) {
+    const downloading = page.waitForEvent("download");
+    await page.locator(".received-attachment").filter({ hasText: name }).getByRole("button", { name: /^Download/ }).click();
+    const download = await downloading;
+    expect(download.suggestedFilename()).toBe(name);
+    expect(await Bun.file((await download.path())!).text()).toBe(contents);
+  }
   for (const request of requests) {
     expect(new URL(request.url).origin).toBe(origin);
     // Browser request events may expose the navigation fragment; wire requests never include it.
     if (request.url.includes("/api/")) expect(request.url).not.toContain(key);
-    if (request.body) for (const secret of [text, fileText, filename, key]) expect(request.body.includes(Buffer.from(secret))).toBe(false);
+    if (request.body) for (const secret of [text, fileText, filename, secondName, secondText, key]) expect(request.body.includes(Buffer.from(secret))).toBe(false);
   }
   expect(await context.cookies()).toEqual([]);
   for (const url of networkUrls) if (/^https?:/.test(url)) expect(new URL(url).origin).toBe(origin);
@@ -110,7 +116,7 @@ test("real encrypted text + file sharing, clipboard, QR, and zero plaintext tran
   const diskFiles = await Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: join(root, "data"), onlyFiles: true }));
   for (const path of diskFiles) {
     const bytes = Buffer.from(await Bun.file(join(root, "data", path)).arrayBuffer());
-    for (const secret of [text, fileText, filename, key]) expect(bytes.includes(Buffer.from(secret))).toBe(false);
+    for (const secret of [text, fileText, filename, secondName, secondText, key]) expect(bytes.includes(Buffer.from(secret))).toBe(false);
   }
 });
 
@@ -140,7 +146,17 @@ test("mobile keyboard flow, validation, privacy, and screenshots", async () => {
   await page.getByLabel("Your message").focus();
   await page.keyboard.type("A message created with the keyboard.");
   await page.keyboard.press("Tab");
-  await browserExpect(page.getByRole("button", { name: /Drop a file/ })).toBeFocused();
+  await browserExpect(page.getByRole("button", { name: /Drop/ })).toBeFocused();
+  const firstPath = join(root, "notes.txt"); const secondPath = join(root, "remove-me.txt");
+  const thirdName = "a-long-attachment-name-that-should-fit-on-a-mobile-screen-without-overflow.txt";
+  const thirdPath = join(root, thirdName);
+  await Bun.write(firstPath, "first"); await Bun.write(secondPath, "second"); await Bun.write(thirdPath, "third");
+  await page.locator("#bin-file").setInputFiles([firstPath, secondPath]);
+  await page.locator("#bin-file").setInputFiles(thirdPath);
+  await page.getByRole("button", { name: /Remove.*remove-me/ }).click();
+  await browserExpect(page.getByText("notes.txt", { exact: true })).toBeVisible();
+  await browserExpect(page.getByText(thirdName, { exact: true })).toBeVisible();
+  await browserExpect(page.getByText("remove-me.txt", { exact: true })).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: "test-results/smallbin-mobile.png", fullPage: true });
   await page.setViewportSize({ width: 1440, height: 1080 });
@@ -155,30 +171,84 @@ test("cancelled upload keeps draft and allows retry", async () => {
   let release!: () => void; const delayed = new Promise<void>(resolve => { release = resolve; });
   await page.route("**/api/bins?*", async route => { seen(); await delayed; await route.abort().catch(() => {}); });
   await page.getByLabel("Your message").fill("keep my draft");
+  const paths = [join(root, "keep-first.txt"), join(root, "keep-second.txt")];
+  await Bun.write(paths[0]!, "first"); await Bun.write(paths[1]!, "second");
+  await page.locator("#bin-file").setInputFiles(paths);
   await page.getByRole("button", { name: "Create private link", exact: true }).click();
   await intercepted;
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   release();
   await browserExpect(page.getByLabel("Your message")).toHaveValue("keep my draft");
+  for (const name of ["keep-first.txt", "keep-second.txt"]) await browserExpect(page.getByText(name, { exact: true })).toBeVisible();
   await browserExpect(page.getByRole("status")).toContainText("Cancelled");
   await page.unroute("**/api/bins?*");
   await share("keep my draft");
 });
 
-test("100 MB file plus 1 MB text round-trips through the real browser", async () => {
-  const path = join(root, "maximum.bin");
-  const contents = new Uint8Array(LIMITS.maxFileBytes).fill(71); contents[0] = 1; contents[contents.length - 1] = 255;
-  const expectedHash = new Bun.CryptoHasher("sha256").update(contents).digest("hex");
-  await Bun.write(path, contents);
+test("files totaling exactly 100 MB plus 1 MB text round-trip; an extra byte is rejected", async () => {
+  const firstPath = join(root, "first-half.bin");
+  const secondPath = join(root, "second-half.bin");
+  const first = new Uint8Array(LIMITS.maxFileBytes / 2).fill(71);
+  const second = new Uint8Array(LIMITS.maxFileBytes / 2).fill(33);
+  first[0] = 1; second[second.length - 1] = 255;
+  const files = [
+    { path: firstPath, name: "first-half.bin", hash: new Bun.CryptoHasher("sha256").update(first).digest("hex") },
+    { path: secondPath, name: "second-half.bin", hash: new Bun.CryptoHasher("sha256").update(second).digest("hex") },
+  ];
+  await Bun.write(firstPath, first); await Bun.write(secondPath, second);
+  await page.locator("#bin-file").setInputFiles([firstPath, secondPath]);
+  const extraPath = join(root, "one-byte-over.bin"); await Bun.write(extraPath, new Uint8Array([7]));
+  let uploads = 0;
+  page.on("request", request => { if (request.method() === "POST") uploads++; });
+  await page.locator("#bin-file").setInputFiles(extraPath);
+  await browserExpect(page.getByRole("alert")).toContainText("100 MB");
+  expect(uploads).toBe(0);
+  await browserExpect(page.getByText("one-byte-over.bin", { exact: true })).toHaveCount(0);
   const text = "a".repeat(LIMITS.maxTextBytes);
-  const link = await share(text, { path });
+  const link = await share(text);
   await page.goto(link);
-  await browserExpect(page.getByRole("button", { name: "Download file", exact: true })).toBeVisible({ timeout: 120_000 });
+  await browserExpect(page.locator(".received-attachment")).toHaveCount(2, { timeout: 120_000 });
   expect(await page.locator(".received-text").textContent()).toBe(text);
-  const downloading = page.waitForEvent("download");
-  await page.getByRole("button", { name: "Download file", exact: true }).click();
-  const download = await downloading;
-  const downloaded = await Bun.file((await download.path())!).arrayBuffer();
-  expect(downloaded.byteLength).toBe(LIMITS.maxFileBytes);
-  expect(new Bun.CryptoHasher("sha256").update(downloaded).digest("hex")).toBe(expectedHash);
+  for (const file of files) {
+    const downloading = page.waitForEvent("download");
+    await page.locator(".received-attachment").filter({ hasText: file.name }).getByRole("button", { name: /^Download/ }).click();
+    const download = await downloading;
+    const downloaded = await Bun.file((await download.path())!).arrayBuffer();
+    expect(download.suggestedFilename()).toBe(file.name);
+    expect(downloaded.byteLength).toBe(LIMITS.maxFileBytes / 2);
+    expect(new Bun.CryptoHasher("sha256").update(downloaded).digest("hex")).toBe(file.hash);
+  }
 }, 180_000);
+
+test("existing v1 single-file links still open with the updated frontend", async () => {
+  // Build the previous wire format independently of the current encryptor.
+  const encoder = new TextEncoder();
+  const text = "Saved before multiple attachments were supported.";
+  const filename = "legacy-note.txt";
+  const attachment = encoder.encode("original attachment bytes");
+  const message = encoder.encode(text);
+  const metadata = encoder.encode(JSON.stringify({ textLength: message.length, file: { name: filename, type: "text/plain", size: attachment.length } }));
+  const plaintext = new Uint8Array(4 + metadata.length + message.length + attachment.length);
+  new DataView(plaintext.buffer).setUint32(0, metadata.length, false);
+  plaintext.set(metadata, 4); plaintext.set(message, 4 + metadata.length); plaintext.set(attachment, 4 + metadata.length + message.length);
+  const header = new Uint8Array([0x53, 0x42, 0x49, 0x4e, 1]);
+  const rawKey = crypto.getRandomValues(new Uint8Array(32));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await crypto.subtle.importKey("raw", rawKey, "AES-GCM", false, ["encrypt"]);
+  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: header }, key, plaintext);
+  const payload = new Uint8Array(17 + ciphertext.byteLength);
+  payload.set(header); payload.set(iv, 5); payload.set(new Uint8Array(ciphertext), 17);
+  const response = await fetch(`${origin}/api/bins?ttlSeconds=300`, {
+    method: "POST", headers: { origin, "content-type": "application/octet-stream" }, body: payload,
+  });
+  expect(response.status).toBe(201);
+  const { id } = await response.json() as { id: string };
+  await page.goto(`${origin}/b/${id}#${Buffer.from(rawKey).toString("base64url")}`);
+  await browserExpect(page.locator(".received-text")).toHaveText(text);
+  await browserExpect(page.locator(".received-attachment")).toHaveCount(1);
+  const downloading = page.waitForEvent("download");
+  await page.locator(".received-attachment").getByRole("button", { name: /^Download/ }).click();
+  const download = await downloading;
+  expect(download.suggestedFilename()).toBe(filename);
+  expect(await Bun.file((await download.path())!).text()).toBe("original attachment bytes");
+});
