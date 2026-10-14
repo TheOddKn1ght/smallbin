@@ -87,6 +87,7 @@ progress::-moz-progress-bar { background: #ededee; }
 .qr-panel { display: flex; align-items: center; gap: 20px; padding: 16px; border: 1px solid var(--line); margin-top: 18px; }
 .qr-code { width: 148px; height: 148px; flex-shrink: 0; }
 .qr-panel p { font-size: 13px; color: var(--muted); line-height: 1.7; }
+.qr-panel .copy-error { color: #ffb3aa; }
 .expiry-line { margin: 24px 0 12px; font-size: 13px; color: var(--muted); line-height: 1.7; }
 .result-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; border-top: 1px solid var(--line); margin-top: 28px; padding-top: 16px; }
 .result-footer > span { color: var(--muted); font-size: 12px; }

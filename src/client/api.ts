@@ -144,14 +144,22 @@ export function safeFilename(name: string): string {
 }
 
 export function downloadFile(file: { name: string; bytes: Uint8Array }): () => void {
-  const url = URL.createObjectURL(new Blob([file.bytes as Uint8Array<ArrayBuffer>], { type: "application/octet-stream" }));
+  return downloadBlob(new Blob([file.bytes as Uint8Array<ArrayBuffer>], { type: "application/octet-stream" }), file.name);
+}
+
+export function downloadBlob(blob: Blob, filename: string): () => void {
+  const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = safeFilename(file.name);
+  link.download = safeFilename(filename);
   link.rel = "noopener";
-  document.body.append(link);
-  link.click();
-  link.remove();
+  try {
+    document.body.append(link);
+    link.click();
+  } catch (error) {
+    URL.revokeObjectURL(url);
+    throw error;
+  } finally { link.remove(); }
   const timeout = setTimeout(() => URL.revokeObjectURL(url), 30_000);
   return () => { clearTimeout(timeout); URL.revokeObjectURL(url); };
 }

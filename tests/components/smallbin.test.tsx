@@ -13,7 +13,7 @@ for (const key of ["window", "document", "navigator", "HTMLElement", "Node", "Ev
 const { render, fireEvent, waitFor, cleanup, act } = await import("@testing-library/react");
 const { CreateBin } = await import("../../src/components/smallbin/CreateBin");
 const { ReceiveBin } = await import("../../src/components/smallbin/ReceiveBin");
-const { CopyButton, QrCode } = await import("../../src/components/smallbin/ShareResult");
+const { CopyButton, QrCode, ShareResult } = await import("../../src/components/smallbin/ShareResult");
 const { Privacy } = await import("../../src/components/smallbin/Privacy");
 
 const key = "a".repeat(43);
@@ -202,6 +202,82 @@ test("QR is a local vector with no external resource or raw HTML injection", () 
   expect(svg.tagName).toBe("svg");
   expect(svg.querySelector("path")?.getAttribute("d")?.length).toBeGreaterThan(100);
   expect(svg.querySelector("image, script, foreignObject")).toBeNull();
+});
+
+function qrDownloadFixture() {
+  const png = new Blob(["synthetic PNG"], { type: "image/png" });
+  const canvasPrototype = dom.HTMLCanvasElement.prototype as unknown as HTMLCanvasElement;
+  const drawing = { fillStyle: "", fillRect: mock(() => {}) } as unknown as CanvasRenderingContext2D;
+  const getContext = spyOn(canvasPrototype, "getContext").mockReturnValue(drawing);
+  const encode = spyOn(canvasPrototype, "toBlob").mockImplementation(callback => callback(png));
+  const blobs: Blob[] = [];
+  const create = spyOn(URL, "createObjectURL").mockImplementation(blob => {
+    blobs.push(blob as Blob); return `blob:qr-${blobs.length}`;
+  });
+  const revoke = spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+  const filenames: string[] = [];
+  const click = spyOn(dom.HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { filenames.push(this.download); });
+  const view = render(<ShareResult link={`https://smallbin.test/b/${id}#${key}`} expiresAt={expiresAt} onReset={() => {}} />);
+  return { view, png, getContext, encode, create, revoke, filenames, blobs, click, restore() {
+    view.unmount(); getContext.mockRestore(); encode.mockRestore(); create.mockRestore(); revoke.mockRestore(); click.mockRestore();
+  } };
+}
+
+test("QR downloads are explicit PNGs; repeated downloads and hiding the panel release temporary URLs", async () => {
+  const fixture = qrDownloadFixture();
+  try {
+    const { view, png, encode, filenames, blobs, revoke } = fixture;
+    expect(view.queryByRole("button", { name: "Download QR code" })).toBeNull();
+    expect(encode).not.toHaveBeenCalled();
+    fireEvent.click(view.getByRole("button", { name: "Show QR code" }));
+    expect(encode).not.toHaveBeenCalled();
+    for (let index = 1; index <= 2; index++) {
+      fireEvent.click(view.getByRole("button", { name: "Download QR code" }));
+      await waitFor(() => expect(filenames).toHaveLength(index));
+      expect(filenames[index - 1]).toBe("smallbin-qr.png");
+      expect(blobs[index - 1]).toBe(png);
+    }
+    expect(encode).toHaveBeenCalledWith(expect.any(Function), "image/png");
+    expect(revoke).toHaveBeenCalledWith("blob:qr-1");
+    expect(view.getByRole("img", { name: /QR code/ })).toBeTruthy();
+    expect(dom.document.querySelector("a[download]")).toBeNull();
+    fireEvent.click(view.getByRole("button", { name: "Hide QR code" }));
+    expect(revoke).toHaveBeenCalledWith("blob:qr-2");
+  } finally { fixture.restore(); }
+});
+
+test.each(["canvas unavailable", "encoding failed", "download blocked"])("QR download recovers from %s", async failure => {
+  const fixture = qrDownloadFixture();
+  try {
+    if (failure === "canvas unavailable") fixture.getContext.mockReturnValueOnce(null);
+    if (failure === "encoding failed") fixture.encode.mockImplementationOnce(callback => callback(null));
+    if (failure === "download blocked") fixture.click.mockImplementationOnce(() => { throw new Error("denied"); });
+    const { view } = fixture;
+    fireEvent.click(view.getByRole("button", { name: "Show QR code" }));
+    fireEvent.click(view.getByRole("button", { name: "Download QR code" }));
+    await waitFor(() => expect(view.getByRole("alert").textContent).toContain("Try again"));
+    if (failure === "download blocked") expect(fixture.revoke).toHaveBeenCalledWith("blob:qr-1");
+    expect(dom.document.querySelector("a[download]")).toBeNull();
+    fireEvent.click(view.getByRole("button", { name: "Download QR code" }));
+    await waitFor(() => expect(fixture.filenames).toEqual(["smallbin-qr.png"]));
+    expect(view.queryByRole("alert")).toBeNull();
+  } finally { fixture.restore(); }
+});
+
+test("hiding the QR panel during encoding prevents a late download", async () => {
+  const fixture = qrDownloadFixture();
+  try {
+    let finish!: BlobCallback;
+    fixture.encode.mockImplementation(callback => { finish = callback; });
+    const { view } = fixture;
+    fireEvent.click(view.getByRole("button", { name: "Show QR code" }));
+    fireEvent.click(view.getByRole("button", { name: "Download QR code" }));
+    expect((view.getByRole("button", { name: "Preparing…" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(view.getByRole("button", { name: "Hide QR code" }));
+    await act(async () => { finish(fixture.png); });
+    expect(fixture.create).not.toHaveBeenCalled();
+    expect(fixture.click).not.toHaveBeenCalled();
+  } finally { fixture.restore(); }
 });
 
 test("privacy page describes metadata, copies, infrastructure, and trust limits", () => {

@@ -4,7 +4,7 @@ Private, temporary text and file sharing. No account required. Text, filenames, 
 
 - Share text, multiple files, or both; attachments total up to 100 MB, with a separate 1 MB text limit.
 - Choose expiry from 5 minutes to 12 hours.
-- Copy a link or a locally generated QR code.
+- Copy a link, show its QR code, or download it as a locally generated PNG.
 - Self-host with Bun, Drizzle, SQLite, and encrypted files on local disk.
 
 Anyone with the complete link can decrypt a bin. The server still sees ciphertext sizes and request timing. Browser history and downloaded copies can outlive expiry. This does not protect against a compromised browser or a server that changes the delivered JavaScript.

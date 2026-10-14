@@ -66,7 +66,7 @@ async function share(text: string, files: string[] = []) {
   return link.inputValue();
 }
 
-test("real encrypted text + multiple files, clipboard, QR, and zero plaintext transmission", async () => {
+test("real encrypted text + multiple files, clipboard, downloadable QR, and zero plaintext transmission", async () => {
   const text = "SECRET-SENTINEL-αβ-<script>window.compromised=true</script>";
   const filename = "private-financial-note.txt";
   const fileText = "ATTACHMENT-SENTINEL-ONLY-RECIPIENTS-SEE-THIS";
@@ -90,6 +90,39 @@ test("real encrypted text + multiple files, clipboard, QR, and zero plaintext tr
     return Array.from(ctx.getImageData(0, 0, 512, 512).data);
   });
   expect(jsQR(new Uint8ClampedArray(qrPixels), 512, 512)?.data).toBe(link);
+  const qrDownload = page.getByRole("button", { name: "Download QR code", exact: true });
+  for (const mobile of [false, true]) {
+    if (mobile) {
+      await page.setViewportSize({ width: 390, height: 844 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await qrDownload.focus();
+      await browserExpect(qrDownload).toBeFocused();
+    }
+    const httpBefore = networkUrls.filter(url => /^https?:/.test(url));
+    const wireBefore = [...wireUrls];
+    const downloading = page.waitForEvent("download");
+    if (mobile) await page.keyboard.press("Enter");
+    else await qrDownload.click();
+    const download = await downloading;
+    expect(download.suggestedFilename()).toBe("smallbin-qr.png");
+    expect(await download.failure()).toBeNull();
+    const png = Buffer.from(await Bun.file((await download.path())!).arrayBuffer());
+    expect(Array.from(png.subarray(0, 8))).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+    const downloadedQr = await page.evaluate(async dataUrl => {
+      const image = new Image(); image.src = dataUrl; await image.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
+      const ctx = canvas.getContext("2d")!; ctx.drawImage(image, 0, 0);
+      return { width: canvas.width, height: canvas.height, pixels: Array.from(ctx.getImageData(0, 0, canvas.width, canvas.height).data) };
+    }, `data:image/png;base64,${png.toString("base64")}`);
+    expect(downloadedQr.width).toBeGreaterThan(0);
+    expect(downloadedQr.height).toBe(downloadedQr.width);
+    expect(jsQR(new Uint8ClampedArray(downloadedQr.pixels), downloadedQr.width, downloadedQr.height)?.data).toBe(link);
+    expect(networkUrls.filter(url => /^https?:/.test(url))).toEqual(httpBefore);
+    expect(wireUrls).toEqual(wireBefore);
+    await browserExpect(page.getByRole("textbox", { name: "Private share link", exact: true })).toHaveValue(link);
+    await page.screenshot({ path: `test-results/smallbin-qr-${mobile ? "mobile" : "desktop"}.png`, fullPage: true });
+  }
   await page.goto(link);
   await browserExpect(page.locator(".received-text")).toHaveText(text);
   expect(await page.evaluate(() => (window as unknown as { compromised?: boolean }).compromised)).toBeUndefined();
