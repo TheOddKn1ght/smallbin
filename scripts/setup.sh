@@ -3,13 +3,15 @@
 
 usage() {
   cat <<'EOF'
-Usage: bash scripts/setup.sh [--prepare-only] [--help]
+Usage: bash scripts/setup.sh [--update] [--prepare-only] [--help]
 
 Default: build and start Smallbin with Docker Compose, then configure host nginx
 and an HTTPS certificate on Debian/Ubuntu with systemd. Existing data is retained.
 
 --prepare-only  Write .env and rendered nginx configs without Docker, network,
                 package installation, or host service changes (also works on macOS).
+--update        Reuse an existing .env and HTTPS certificate. Build the new image
+                before replacing the app; retain settings, backups, and stored bins.
 --help          Show this help.
 
 Configuration is reviewed and confirmed before any files are replaced. Existing
@@ -51,6 +53,10 @@ initialize_paths() {
   RUN_STAMP=$(date -u +%Y%m%dT%H%M%SZ)
   BACKUP_COUNTER=0
   APP_STARTED=false
+  UPDATE_MODE=${UPDATE_MODE:-false}
+  COMPOSE_ENV_FILE=''
+  STAGED_ENV_FILE=''
+  PREVIOUS_IMAGE=''
   STAGE='configuration review'
 }
 
@@ -110,6 +116,9 @@ confirm() {
 
 prepare_inputs() {
   local existing_origin default_domain existing_bytes default_storage answer
+  if [[ "$UPDATE_MODE" == true && ! -f "$ENV_FILE" ]]; then
+    fail '--update requires an existing .env. Run bash scripts/setup.sh for the first deployment.'; return 1
+  fi
   existing_origin=$(read_env_value "$ENV_FILE" PUBLIC_ORIGIN)
   default_domain=${existing_origin#https://}; default_domain=${default_domain%/}
   valid_domain "$default_domain" || default_domain=''
@@ -122,15 +131,30 @@ prepare_inputs() {
     while [[ "$default_storage" == *0 ]]; do default_storage=${default_storage%0}; done
     default_storage=${default_storage%.}
   fi
-  while :; do DOMAIN=$(prompt 'Domain (for example bin.example.com)' "$default_domain") || return 1; valid_domain "$DOMAIN" && break; printf 'Enter a full domain without a URL, path, wildcard, or port.\n' >&2; done
-  DOMAIN=$(printf '%s' "$DOMAIN" | tr '[:upper:]' '[:lower:]')
-  while :; do answer=$(prompt 'Loopback host port' "$HOST_PORT") || return 1; valid_port "$answer" && { HOST_PORT=$((10#$answer)); break; }; printf 'Choose a port from 1024 to 65535.\n' >&2; done
-  while :; do STORAGE_GB=$(prompt 'Encrypted storage quota in GB (decimal)' "$default_storage") || return 1; MAX_STORAGE_BYTES=$(storage_bytes "$STORAGE_GB") && break; printf 'Choose 0.101016421 to 999999.999999999 GB (up to 9 decimals).\n' >&2; done
+  if [[ "$UPDATE_MODE" == true ]]; then
+    DOMAIN=${existing_origin#https://}
+    if [[ "$existing_origin" != https://* ]] || ! valid_domain "$DOMAIN"; then
+      fail 'Existing PUBLIC_ORIGIN must be an HTTPS domain without a path or port. Run setup without --update to change it.'; return 1
+    fi
+    HOST_PORT=$(read_env_value "$ENV_FILE" PORT)
+    if ! valid_port "$HOST_PORT"; then fail 'Existing PORT must be between 1024 and 65535. Run setup without --update to change it.'; return 1; fi
+    if [[ ! "$existing_bytes" =~ ^[0-9]{1,15}$ ]] || (( 10#$existing_bytes < 101016421 )); then
+      fail 'Existing MAX_STORAGE_BYTES must allow at least one maximum-size bin. Run setup without --update to change it.'; return 1
+    fi
+    MAX_STORAGE_BYTES=$existing_bytes
+    STORAGE_GB=$default_storage
+  else
+    while :; do DOMAIN=$(prompt 'Domain (for example bin.example.com)' "$default_domain") || return 1; valid_domain "$DOMAIN" && break; printf 'Enter a full domain without a URL, path, wildcard, or port.\n' >&2; done
+    DOMAIN=$(printf '%s' "$DOMAIN" | tr '[:upper:]' '[:lower:]')
+    while :; do answer=$(prompt 'Loopback host port' "$HOST_PORT") || return 1; valid_port "$answer" && { HOST_PORT=$((10#$answer)); break; }; printf 'Choose a port from 1024 to 65535.\n' >&2; done
+    while :; do STORAGE_GB=$(prompt 'Encrypted storage quota in GB (decimal)' "$default_storage") || return 1; MAX_STORAGE_BYTES=$(storage_bytes "$STORAGE_GB") && break; printf 'Choose 0.101016421 to 999999.999999999 GB (up to 9 decimals).\n' >&2; done
+  fi
   TRUSTED_PROXIES=$(read_env_value "$ENV_FILE" TRUSTED_PROXIES)
   DATA_DIR=$(read_env_value "$ENV_FILE" DATA_DIR); DATA_DIR=${DATA_DIR:-./data}
   UPLOAD_TIMEOUT_MS=$(read_env_value "$ENV_FILE" UPLOAD_TIMEOUT_MS); UPLOAD_TIMEOUT_MS=${UPLOAD_TIMEOUT_MS:-120000}
   DOWNLOAD_TIMEOUT_MS=$(read_env_value "$ENV_FILE" DOWNLOAD_TIMEOUT_MS); DOWNLOAD_TIMEOUT_MS=${DOWNLOAD_TIMEOUT_MS:-120000}
   SMALLBIN_IMAGE=$(read_env_value "$ENV_FILE" SMALLBIN_IMAGE); SMALLBIN_IMAGE=${SMALLBIN_IMAGE:-smallbin:local}
+  PREVIOUS_IMAGE=$SMALLBIN_IMAGE
   if [[ "$PREPARE_ONLY" == false ]]; then
     SMALLBIN_IMAGE="smallbin:setup-$(printf '%s' "$RUN_STAMP" | tr '[:upper:]' '[:lower:]')-$$"
   fi
@@ -140,6 +164,11 @@ prepare_inputs() {
     fi
   done
   printf '\nDomain:       https://%s\nHost port:    127.0.0.1:%s\nStorage:      %s GB (%s bytes)\nImage:        %s\nMode:         %s\nFiles:        %s, %s, %s\n\n' "$DOMAIN" "$HOST_PORT" "$STORAGE_GB" "$MAX_STORAGE_BYTES" "$SMALLBIN_IMAGE" "$([[ "$PREPARE_ONLY" == true ]] && printf 'prepare only' || printf 'full deployment')" "$ENV_FILE" "$HTTP_CONFIG" "$HTTPS_CONFIG"
+  if [[ "$UPDATE_MODE" == true ]]; then
+    printf 'Existing settings and unknown .env entries will be retained. Configuration backups are kept.\n'
+    confirm 'Update using this configuration?' || return 1
+    return 0
+  fi
   confirm 'Write this configuration?' || return 1
   if [[ -e "$ENV_FILE" || -e "$HTTP_CONFIG" || -e "$HTTPS_CONFIG" || ( "$PREPARE_ONLY" == false && -e "$NGINX_SITE" ) ]]; then
     confirm 'Existing configuration found. Replace it and keep timestamped backups?' || return 1
@@ -161,22 +190,38 @@ emit_env() {
 }
 
 write_env() {
-  local temporary
-  backup_file "$ENV_FILE"
+  local destination=${1:-$ENV_FILE} temporary line key
+  if [[ "$destination" == "$ENV_FILE" ]]; then backup_file "$ENV_FILE"; fi
   temporary=$(mktemp "$REPO_DIR/.env.tmp.XXXXXX")
+  if [[ "$UPDATE_MODE" == true && "${PREPARE_ONLY:-false}" == true ]]; then
+    cp "$ENV_FILE" "$temporary"
+    chmod 600 "$temporary"
+    mv "$temporary" "$destination"
+    return 0
+  fi
   {
-    printf '# Generated by scripts/setup.sh; values are literal, not shell commands.\n'
-    emit_env PUBLIC_ORIGIN "https://$DOMAIN"
-    emit_env PORT "$HOST_PORT"
+    if [[ "$UPDATE_MODE" == true ]]; then
+      # Preserve comments, literal values, and settings introduced by later versions.
+      # Only the release image and observed transport peer change during an update.
+      while IFS= read -r line || [[ -n "$line" ]]; do
+        key=$(trim "${line%%=*}")
+        case "$key" in SMALLBIN_IMAGE|TRUSTED_PROXIES) continue ;; esac
+        printf '%s\n' "$line"
+      done < "$ENV_FILE"
+    else
+      printf '# Generated by scripts/setup.sh; values are literal, not shell commands.\n'
+      emit_env PUBLIC_ORIGIN "https://$DOMAIN"
+      emit_env PORT "$HOST_PORT"
+      emit_env DATA_DIR "$DATA_DIR"
+      emit_env MAX_STORAGE_BYTES "$MAX_STORAGE_BYTES"
+      emit_env UPLOAD_TIMEOUT_MS "$UPLOAD_TIMEOUT_MS"
+      emit_env DOWNLOAD_TIMEOUT_MS "$DOWNLOAD_TIMEOUT_MS"
+    fi
     emit_env SMALLBIN_IMAGE "$SMALLBIN_IMAGE"
     emit_env TRUSTED_PROXIES "$TRUSTED_PROXIES"
-    emit_env DATA_DIR "$DATA_DIR"
-    emit_env MAX_STORAGE_BYTES "$MAX_STORAGE_BYTES"
-    emit_env UPLOAD_TIMEOUT_MS "$UPLOAD_TIMEOUT_MS"
-    emit_env DOWNLOAD_TIMEOUT_MS "$DOWNLOAD_TIMEOUT_MS"
   } > "$temporary"
   chmod 600 "$temporary"
-  mv "$temporary" "$ENV_FILE"
+  mv "$temporary" "$destination"
 }
 
 render_nginx() {
@@ -191,9 +236,9 @@ render_nginx() {
 
 write_configuration() {
   mkdir -p "$GENERATED_DIR"
-  write_env
   render_nginx "$REPO_DIR/deploy/nginx-http.conf.template" "$HTTP_CONFIG"
   render_nginx "$REPO_DIR/deploy/nginx.conf.template" "$HTTPS_CONFIG"
+  write_env
 }
 
 run_root() { if [[ $(id -u) == 0 ]]; then "$@"; else sudo "$@"; fi; }
@@ -202,7 +247,7 @@ run_docker() {
     -u UPLOAD_TIMEOUT_MS -u DOWNLOAD_TIMEOUT_MS -u COMPOSE_FILE -u COMPOSE_PROJECT_NAME -u COMPOSE_ENV_FILES \
     -u COMPOSE_PROFILES -u DOCKER_HOST -u DOCKER_CONTEXT docker --context default "$@"
 }
-run_compose() { run_docker compose --project-name smallbin --env-file "$ENV_FILE" --file "$COMPOSE_FILE" "$@"; }
+run_compose() { run_docker compose --project-name smallbin --env-file "${COMPOSE_ENV_FILE:-$ENV_FILE}" --file "$COMPOSE_FILE" "$@"; }
 
 check_host() {
   case "${DOCKER_HOST:-}" in ''|unix:///var/run/docker.sock) ;; *) fail 'Unset DOCKER_HOST: full setup requires the native local Docker daemon.'; return 1 ;; esac
@@ -218,12 +263,12 @@ check_host() {
 
 install_prerequisites() {
   local missing=false command_name docker_missing=false temporary architecture
-  for command_name in docker nginx certbot curl; do command -v "$command_name" >/dev/null || missing=true; done
+  for command_name in docker nginx certbot curl openssl; do command -v "$command_name" >/dev/null || missing=true; done
   if ! command -v docker >/dev/null || ! run_docker compose version >/dev/null 2>&1; then missing=true; docker_missing=true; fi
   [[ "$missing" == true ]] || return 0
   confirm 'Install missing prerequisites using the distribution repositories and Docker official apt repository?' || return 1
   run_root apt-get update
-  run_root apt-get install -y --no-remove ca-certificates curl nginx certbot
+  run_root apt-get install -y --no-remove ca-certificates curl nginx certbot openssl
   if [[ "$docker_missing" == true ]]; then
     architecture=$(dpkg --print-architecture)
     [[ "$architecture" =~ ^[a-z0-9]+$ ]] || { fail 'Invalid package architecture.'; return 1; }
@@ -241,6 +286,43 @@ install_prerequisites() {
   fi
 }
 
+check_update_prerequisites() {
+  local command_name
+  for command_name in docker nginx curl openssl; do
+    if ! command -v "$command_name" >/dev/null; then
+      fail "Updating requires $command_name. Restore the existing deployment prerequisites, or run setup without --update."; return 1
+    fi
+  done
+  if ! run_docker compose version >/dev/null 2>&1; then
+    fail 'Updating requires the installed Docker Compose plugin. Run setup without --update to install missing prerequisites.'; return 1
+  fi
+}
+
+check_update_certificate() {
+  local certificate="/etc/letsencrypt/live/$DOMAIN/fullchain.pem" key="/etc/letsencrypt/live/$DOMAIN/privkey.pem" identity
+  if ! run_root test -s "$certificate" || ! run_root test -s "$key"; then
+    fail "No existing HTTPS certificate was found for $DOMAIN. Run setup without --update to configure HTTPS first."; return 1
+  fi
+  if ! run_root openssl x509 -in "$certificate" -noout -checkend 0; then
+    fail "The existing certificate is expired, invalid, or does not cover $DOMAIN. Renew it with sudo certbot renew --cert-name $DOMAIN before updating."; return 1
+  fi
+  # Some OpenSSL versions exit successfully even when -checkhost reports a mismatch.
+  identity=$(run_root env LC_ALL=C openssl x509 -in "$certificate" -noout -checkhost "$DOMAIN") || return 1
+  if [[ "$identity" != "Hostname $DOMAIN does match certificate" ]]; then
+    fail "The existing certificate does not cover $DOMAIN. Correct the certificate or run setup without --update before replacing the app."; return 1
+  fi
+}
+
+ensure_compose_network() {
+  local network
+  network=$(run_docker network ls --filter label=com.docker.compose.project=smallbin --filter label=com.docker.compose.network=default --format '{{.ID}}')
+  if [[ -z "$network" ]]; then
+    # A fresh installation needs a network before its exact gateway can be trusted.
+    # Never replace an existing container just to discover that gateway.
+    run_compose create --no-recreate
+  fi
+}
+
 configure_proxy_trust() {
   local network driver gateways candidate selected=''
   network=$(run_docker network ls --filter label=com.docker.compose.project=smallbin --filter label=com.docker.compose.network=default --format '{{.ID}}')
@@ -253,7 +335,7 @@ configure_proxy_trust() {
   done <<< "$gateways"
   [[ -n "$selected" ]] || { fail 'Docker did not report an IPv4 bridge gateway.'; return 1; }
   TRUSTED_PROXIES=$selected
-  write_env
+  write_env "${COMPOSE_ENV_FILE:-$ENV_FILE}"
   printf 'Trusted nginx transport peer: %s (Docker bridge gateway only).\n' "$TRUSTED_PROXIES"
 }
 
@@ -297,6 +379,13 @@ restore_nginx_config() {
 
 configure_https() {
   local certificate="/etc/letsencrypt/live/$DOMAIN/fullchain.pem" key="/etc/letsencrypt/live/$DOMAIN/privkey.pem" temporary bootstrap_changed=false bootstrap_backup=''
+  if [[ "$UPDATE_MODE" == true ]]; then
+    STAGE='nginx HTTPS update'
+    install_nginx_config "$HTTPS_CONFIG"
+    STAGE='HTTPS verification'
+    curl --fail --show-error --silent --retry 3 --connect-timeout 10 --max-time 30 "https://$DOMAIN/" -o /dev/null
+    return 0
+  fi
   run_root install -d -m 755 /var/www/letsencrypt
   run_root systemctl enable --now nginx
   if ! run_root test -s "$certificate" || ! run_root test -s "$key"; then
@@ -343,7 +432,7 @@ configure_https() {
 perform_deployment() {
   local endpoint security operating_system
   STAGE='prerequisite installation'
-  install_prerequisites
+  if [[ "$UPDATE_MODE" == true ]]; then check_update_prerequisites; else install_prerequisites; fi
   run_root systemctl enable --now docker
   endpoint=$(run_docker context inspect default --format '{{.Endpoints.docker.Host}}')
   [[ "$endpoint" == unix:///var/run/docker.sock ]] || { fail 'Full deployment requires the native /var/run/docker.sock daemon, not a remote or Desktop context.'; return 1; }
@@ -351,11 +440,23 @@ perform_deployment() {
   [[ "$security" != *rootless* ]] || { fail 'Rootless Docker requires manual proxy-peer configuration; use --prepare-only.'; return 1; }
   operating_system=$(run_docker info --format '{{.OSType}}|{{.OperatingSystem}}')
   [[ "$operating_system" == linux\|* && "$operating_system" != *Desktop* ]] || { fail 'Docker Desktop and non-Linux daemons need manual setup; use --prepare-only.'; return 1; }
+  if [[ "$UPDATE_MODE" == true ]]; then
+    STAGE='existing HTTPS certificate verification'
+    check_update_certificate
+  fi
+  STAGE='candidate configuration'
+  STAGED_ENV_FILE=$(mktemp "$REPO_DIR/.env.setup.XXXXXX")
+  COMPOSE_ENV_FILE=$STAGED_ENV_FILE
+  write_env "$STAGED_ENV_FILE"
+  run_compose config --quiet
   STAGE='Docker image build'
   run_compose build
-  STAGE='Compose creation and proxy discovery'
-  run_compose create
+  STAGE='Docker network and proxy discovery'
+  ensure_compose_network
   configure_proxy_trust
+  STAGE='configuration files'
+  write_configuration
+  COMPOSE_ENV_FILE=''
   STAGE='application startup and readiness'
   APP_STARTED=true
   run_compose up -d --no-build --wait
@@ -367,26 +468,36 @@ perform_deployment() {
 report_failure() {
   local status=$1 line=${2:-unknown}
   printf '\nSetup stopped during %s (line %s, exit %s).\nConfiguration: %s\nRendered nginx files: %s\nNo data volumes were removed. Existing backups remain next to their original files.\n' "${STAGE:-initialization}" "$line" "$status" "${ENV_FILE:-not written}" "${GENERATED_DIR:-not written}" >&2
-  if [[ "${APP_STARTED:-false}" == true ]]; then printf 'Smallbin may still be running; setup has not stopped it. Check http://127.0.0.1:%s/healthz and fix the failed stage before rerunning.\n' "$HOST_PORT" >&2; fi
+  if [[ "${APP_STARTED:-false}" == true ]]; then
+    printf 'The replacement may have started and applied database migrations. Check docker compose ps and http://127.0.0.1:%s/healthz.\nNo image or database rollback was attempted. Previous configured image: %s. Review migration compatibility in DEPLOYMENT.md before rolling back.\n' "$HOST_PORT" "${PREVIOUS_IMAGE:-unknown}" >&2
+  else
+    printf 'No running app was replaced. Correct the failed stage and rerun the same command.\n' >&2
+  fi
+}
+
+cleanup_staged_configuration() {
+  if [[ -n "${STAGED_ENV_FILE:-}" ]]; then rm -f "$STAGED_ENV_FILE"; fi
 }
 
 main() {
   set -Eeuo pipefail
   umask 077
   PREPARE_ONLY=false
+  UPDATE_MODE=false
   while [[ $# -gt 0 ]]; do
-    case "$1" in --prepare-only) PREPARE_ONLY=true ;; --help|-h) usage; return 0 ;; *) usage >&2; fail "Unknown option: $1"; return 1 ;; esac
+    case "$1" in --prepare-only) PREPARE_ONLY=true ;; --update) UPDATE_MODE=true ;; --help|-h) usage; return 0 ;; *) usage >&2; fail "Unknown option: $1"; return 1 ;; esac
     shift
   done
   initialize_paths
   trap 'status=$?; report_failure "$status" "$LINENO"; exit "$status"' ERR
   trap 'report_failure 130 "$LINENO"; exit 130' INT
   trap 'report_failure 143 "$LINENO"; exit 143' TERM
+  trap cleanup_staged_configuration EXIT
   if [[ "$PREPARE_ONLY" == false ]]; then check_host; fi
   prepare_inputs
-  STAGE='configuration files'
-  write_configuration
   if [[ "$PREPARE_ONLY" == true ]]; then
+    STAGE='configuration files'
+    write_configuration
     printf '\nConfiguration prepared. Review %s and %s. No host services were changed.\n' "$ENV_FILE" "$GENERATED_DIR"
     return 0
   fi

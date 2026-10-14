@@ -190,6 +190,10 @@ try {
   const appUrl = await urlFor(appName, 3210);
   await ready(appUrl);
   assert.notEqual(await docker(["exec", appName, "id", "-u"]), "0", "App must run as non-root");
+  assert.deepEqual(JSON.parse(await docker(["inspect", appName, "--format", "{{json .Config.Cmd}}"])),
+    ["bun", "--smol", "dist/index.js"], "App must use Bun's memory-saving runtime mode");
+  const manifest = await Bun.file(resolve(import.meta.dir, "../package.json")).json();
+  assert.equal(await docker(["exec", appName, "bun", "--version"]), manifest.packageManager.replace(/^bun@/, ""));
   assert.equal(await docker(["inspect", appName, "--format", "{{.HostConfig.ReadonlyRootfs}}"]), "true");
   const direct = await createBin(appUrl, `deployment synthetic plaintext ${prefix}`);
   await verifyBin(appUrl, direct);

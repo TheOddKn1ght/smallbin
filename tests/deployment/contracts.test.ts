@@ -9,7 +9,13 @@ const read = (name: string) => Bun.file(resolve(root, name)).text();
 describe("deployment privacy and persistence contracts", () => {
   test("container is non-root, reproducible, and carries its migrations", async () => {
     const dockerfile = await read("Dockerfile");
-    expect(dockerfile).toContain("FROM oven/bun:1.4.2 AS runtime");
+    const manifest = await Bun.file(resolve(root, "package.json")).json();
+    const version = manifest.packageManager.replace(/^bun@/, "");
+    expect(version).toMatch(/^\d+\.\d+\.\d+$/);
+    const images = [...dockerfile.matchAll(/^FROM oven\/bun:([^ ]+) AS /gm)].map(match => match[1]);
+    expect(images).toEqual([version, version, version]);
+    const workflow = Bun.YAML.parse(await read(".github/workflows/ci.yml")) as { env: { BUN_VERSION: string } };
+    expect(workflow.env.BUN_VERSION).toBe(version);
     expect(dockerfile).toMatch(/COPY package\.json bun\.lock bunfig\.toml/);
     expect(dockerfile.match(/RUN bun install --frozen-lockfile/g)).toHaveLength(2);
     const bunfig = Bun.TOML.parse(await read("bunfig.toml")) as { install: { minimumReleaseAge: number } };
@@ -21,7 +27,10 @@ describe("deployment privacy and persistence contracts", () => {
     expect(dockerfile).toContain("PORT=3210");
     expect(dockerfile).toContain("EXPOSE 3210");
     expect(dockerfile).toContain("process.env.PORT ?? 3210");
-    expect(dockerfile).toContain('CMD ["bun", "dist/index.js"]');
+    expect(dockerfile).toContain('CMD ["bun", "--smol", "dist/index.js"]');
+    expect(dockerfile).toContain("CMD bun --smol -e");
+    expect(manifest.scripts.start).toBe("NODE_ENV=production bun --smol dist/index.js");
+    expect(manifest.scripts.dev).toBe("bun --smol src/dev.ts");
   });
 
   test("Compose publishes only localhost and keeps all state on a hardened writable volume", async () => {

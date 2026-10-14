@@ -3,9 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "packageManager": "bun@1.4.3",
   "scripts": {
-    "dev": "bun src/dev.ts",
-    "start": "NODE_ENV=production bun dist/index.js",
+    "dev": "bun --smol src/dev.ts",
+    "start": "NODE_ENV=production bun --smol dist/index.js",
     "build": "bun run build.ts",
     "test": "bun test tests/crypto tests/server tests/client tests/components tests/deployment tests/http",
     "test:coverage": "bun test --coverage --coverage-reporter=text --coverage-reporter=lcov tests/crypto tests/server tests/client tests/components tests/deployment tests/http",

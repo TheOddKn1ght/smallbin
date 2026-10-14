@@ -1,7 +1,7 @@
-import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { Window } from "happy-dom";
 import type { ClientServices } from "../../src/client/api";
-import { ClientError, defaultConfig } from "../../src/client/api";
+import { ClientError, clientServices, defaultConfig } from "../../src/client/api";
 
 const dom = new Window({ url: "https://smallbin.test/" });
 const originalGlobals = new Map<string, PropertyDescriptor | undefined>();
@@ -263,6 +263,107 @@ test("fragment changes update the recipient and skip navigation preserves the se
   expect(view.getByRole("alert").textContent).toContain("decryption key is missing");
   view.unmount();
   dom.history.replaceState(null, "", "/");
+});
+
+describe("header navigation", () => {
+  test("opens privacy without a document load, focuses content, and returns to an empty creation form", async () => {
+    const { App } = await import("../../src/App");
+    dom.history.replaceState(null, "", "/");
+    const config = spyOn(clientServices, "config").mockResolvedValue(defaultConfig);
+    const open = spyOn(dom, "open").mockReturnValue(null);
+    const scroll = spyOn(dom, "scrollTo").mockImplementation(() => {});
+    const push = spyOn(dom.history, "pushState");
+    try {
+      const view = render(<App />); await ready(view);
+      fireEvent.change(view.getByLabelText(/Your message/), { target: { value: "private draft" } });
+      const shell = view.container.firstChild;
+      fireEvent.click(view.getByRole("link", { name: "Privacy" }));
+      expect(view.getByRole("heading", { name: "Privacy", level: 1 })).toBeTruthy();
+      expect(view.container.firstChild).toBe(shell);
+      expect(dom.location.pathname).toBe("/privacy");
+      expect(dom.document.title).toBe("Privacy | Smallbin");
+      expect(push).toHaveBeenCalledWith(null, "", "/privacy");
+      expect(dom.history.state).toBeNull();
+      expect(dom.document.activeElement?.id).toBe("main");
+      expect(scroll).toHaveBeenCalledWith(0, 0);
+      expect(open).not.toHaveBeenCalled();
+      expect(view.getByRole("link", { name: "Privacy" }).getAttribute("aria-current")).toBe("page");
+      fireEvent.click(view.getByRole("link", { name: "Smallbin home" }));
+      await ready(view);
+      expect(dom.location.pathname).toBe("/");
+      expect(dom.document.title).toBe("Smallbin");
+      expect((view.getByLabelText(/Your message/) as HTMLTextAreaElement).value).toBe("");
+      expect(view.getByRole("link", { name: "New bin" }).getAttribute("aria-current")).toBe("page");
+      expect(open).not.toHaveBeenCalled();
+    } finally {
+      cleanup(); config.mockRestore(); open.mockRestore(); scroll.mockRestore(); push.mockRestore();
+      dom.history.replaceState(null, "", "/");
+    }
+  });
+
+  test.each([
+    { ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 },
+  ])("leaves modified clicks to the browser: %j", async options => {
+    const { App } = await import("../../src/App");
+    dom.history.replaceState(null, "", `/b/${id}#invalid`);
+    const open = spyOn(dom, "open").mockReturnValue(null);
+    const push = spyOn(dom.history, "pushState");
+    try {
+      const view = render(<App />);
+      const event = new dom.MouseEvent("click", { bubbles: true, cancelable: true, button: 0, ...options });
+      fireEvent(view.getByRole("link", { name: "Privacy" }), event as unknown as Event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(push).not.toHaveBeenCalled();
+      expect(dom.location.hash).toBe("#invalid");
+      expect(view.getByRole("alert").textContent).toContain("invalid decryption key");
+    } finally {
+      cleanup(); open.mockRestore(); push.mockRestore();
+      dom.history.replaceState(null, "", "/");
+    }
+  });
+
+  test("browser back restores the recipient fragment and forward restores privacy", async () => {
+    const { App } = await import("../../src/App");
+    dom.history.replaceState(null, "", `/b/${id}#invalid`);
+    const view = render(<App />);
+    try {
+      fireEvent.click(view.getByRole("link", { name: "Privacy" }));
+      expect(dom.location.hash).toBe("");
+      await act(async () => { dom.history.back(); await dom.happyDOM.waitUntilComplete(); });
+      expect(dom.location.pathname).toBe(`/b/${id}`);
+      expect(dom.location.hash).toBe("#invalid");
+      expect(view.getByRole("alert").textContent).toContain("invalid decryption key");
+      fireEvent.click(view.getByRole("link", { name: "Skip to content" }));
+      expect(dom.location.hash).toBe("#invalid");
+      expect(dom.document.title).toBe("Smallbin");
+      await act(async () => { dom.history.forward(); await dom.happyDOM.waitUntilComplete(); });
+      expect(dom.location.pathname).toBe("/privacy");
+      expect(dom.document.title).toBe("Privacy | Smallbin");
+      expect(view.getByRole("heading", { name: "Privacy", level: 1 })).toBeTruthy();
+    } finally {
+      view.unmount(); dom.history.replaceState(null, "", "/");
+    }
+  });
+
+  test("New bin on the creation page keeps native reload behavior", async () => {
+    const { App } = await import("../../src/App");
+    dom.history.replaceState(null, "", "/");
+    const config = spyOn(clientServices, "config").mockResolvedValue(defaultConfig);
+    const open = spyOn(dom, "open").mockReturnValue(null);
+    const push = spyOn(dom.history, "pushState");
+    try {
+      const view = render(<App />); await ready(view);
+      fireEvent.change(view.getByLabelText(/Your message/), { target: { value: "reset this draft" } });
+      const event = new dom.MouseEvent("click", { bubbles: true, cancelable: true, button: 0 });
+      fireEvent(view.getByRole("link", { name: "New bin" }), event as unknown as Event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(open).toHaveBeenCalledWith("https://smallbin.test/", "_self", "");
+      expect(push).not.toHaveBeenCalled();
+    } finally {
+      cleanup(); config.mockRestore(); open.mockRestore(); push.mockRestore();
+      dom.history.replaceState(null, "", "/");
+    }
+  });
 });
 
 test("multiple selections and drops append; each file can be removed while add remains available", async () => {

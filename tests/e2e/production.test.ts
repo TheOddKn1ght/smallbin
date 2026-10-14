@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { decryptBin, encryptBin } from "../../src/shared/crypto";
 
-test("built production entry point starts, migrates, serves private pages, and preserves bins on restart", async () => {
+test("built production entry point runs with --smol, migrates, serves private pages, and preserves bins on restart", async () => {
   const dataDir = await mkdtemp(join(tmpdir(), "smallbin-production-"));
   const reservation = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
   const port = reservation.port!;
@@ -13,7 +13,7 @@ test("built production entry point starts, migrates, serves private pages, and p
   let child: Bun.Subprocess<"ignore", "pipe", "pipe"> | undefined;
   const outputs: Promise<string>[] = [];
   async function start() {
-    child = Bun.spawn([process.execPath, resolve("dist/index.js")], {
+    child = Bun.spawn([process.execPath, "--smol", resolve("dist/index.js")], {
       cwd: process.cwd(), stdin: "ignore", stdout: "pipe", stderr: "pipe",
       env: { ...process.env, NODE_ENV: "production", HOST: "127.0.0.1", PORT: String(port), DATA_DIR: dataDir, PUBLIC_ORIGIN: origin },
     });
@@ -50,7 +50,11 @@ test("built production entry point starts, migrates, serves private pages, and p
       const html = await response.text();
       expect(html).toContain("Smallbin");
       const scripts = [...html.matchAll(/(?:src|href)="(\/(?:chunk|favicon)[^"]+)"/g)];
-      expect(scripts.length).toBeGreaterThanOrEqual(3);
+      expect(scripts.length).toBeGreaterThanOrEqual(route === "/privacy" ? 2 : 3);
+      if (route === "/privacy") {
+        expect(html).toContain("<h1>Privacy</h1>");
+        expect(html).not.toMatch(/<script|<noscript|modulepreload/);
+      }
       for (const match of scripts) {
         const asset = await fetch(`${origin}${match[1]}`);
         expect(asset.status).toBe(200); await asset.body?.cancel();
@@ -65,5 +69,47 @@ test("built production entry point starts, migrates, serves private pages, and p
   } finally {
     await stop();
     await rm(dataDir, { recursive: true, force: true });
+  }
+}, 20_000);
+
+test("development serves privacy directly with CSS and security headers, without the client runtime", async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "smallbin-privacy-dev-"));
+  const reservation = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
+  const port = reservation.port!;
+  await reservation.stop(true);
+  const origin = `http://127.0.0.1:${port}`;
+  const child = Bun.spawn([process.execPath, "--smol", "src/dev.ts"], {
+    cwd: process.cwd(), stdin: "ignore", stdout: "ignore", stderr: "pipe",
+    env: { ...process.env, NODE_ENV: "development", HOST: "127.0.0.1", PORT: String(port), DATA_DIR: dataDir, PUBLIC_ORIGIN: origin },
+  });
+  const errors = new Response(child.stderr).text();
+  try {
+    let response: Response | undefined;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (child.exitCode !== null) throw new Error(`Development server exited: ${await errors}`);
+      try { response = await fetch(`${origin}/privacy`, { signal: AbortSignal.timeout(100) }); break; }
+      catch { await Bun.sleep(25); }
+    }
+    expect(response?.status).toBe(200);
+    expect(response?.headers.get("cache-control")).toBe("no-store");
+    expect(response?.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    const html = await response!.text();
+    expect(html).toContain("<h1>Privacy</h1>");
+    expect(html).toContain("Privacy | Smallbin");
+    expect(html).not.toMatch(/<script|<noscript|modulepreload/);
+    for (const path of ["/privacy.css", "/favicon.svg"]) {
+      const asset = await fetch(`${origin}${path}`);
+      expect(asset.status).toBe(200);
+      expect((await asset.arrayBuffer()).byteLength).toBeGreaterThan(0);
+    }
+    const head = await fetch(`${origin}/privacy`, { method: "HEAD" });
+    expect(head.status).toBe(200); expect(await head.text()).toBe("");
+    const post = await fetch(`${origin}/privacy`, { method: "POST" });
+    expect(post.status).toBe(405); expect(post.headers.get("allow")).toBe("GET, HEAD");
+  } finally {
+    child.kill("SIGTERM");
+    const timeout = setTimeout(() => child.kill("SIGKILL"), 5000);
+    try { await child.exited; await errors; }
+    finally { clearTimeout(timeout); await rm(dataDir, { recursive: true, force: true }); }
   }
 }, 20_000);

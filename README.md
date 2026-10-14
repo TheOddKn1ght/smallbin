@@ -13,7 +13,7 @@ New bins use encrypted format v2 for multiple attachments. Existing v1 links rem
 
 ## Development
 
-Use Bun 1.4.2:
+Use Bun 1.4.3:
 
 ```sh
 bun install --frozen-lockfile
@@ -30,6 +30,8 @@ PUBLIC_ORIGIN=https://bin.example.com bun run start
 ```
 
 Production also defaults to port 3210. Put nginx with HTTPS in front of this process; the development server is intended for localhost.
+
+Development, production, and the Docker container run Bun with `--smol` to reduce memory use by collecting garbage more often. The 14-day package-age policy still applies to dependency updates; the Bun runtime is pinned separately.
 
 ```sh
 bun run test
@@ -48,3 +50,11 @@ bash scripts/setup.sh
 ```
 
 Use `bash scripts/setup.sh --prepare-only` to generate configuration without changing the host. See [DEPLOYMENT.md](DEPLOYMENT.md#interactive-setup) for prerequisites and rerun behavior.
+
+After updating this checkout, rebuild and deploy with the existing settings and certificate:
+
+```sh
+bash scripts/setup.sh --update
+```
+
+The update keeps the data volume and previous image. It builds the replacement before restarting the app; review migration compatibility before rolling back.

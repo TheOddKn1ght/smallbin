@@ -2,7 +2,7 @@
 
 The supported production layout is one Bun container with a local Docker volume, behind nginx on the same Linux host. nginx terminates HTTPS; the app is published only on `127.0.0.1`. SQLite metadata, its WAL files, pending uploads, and encrypted files share `/data`. Do not run multiple application replicas or mount this volume over a network filesystem.
 
-You need Docker Engine with the Compose plugin, nginx, Certbot, a domain pointing to the host, and inbound TCP ports 80 and 443. The local verification commands also require Bun 1.4.2. Keep port 3210 private. Browser encryption requires HTTPS, except for browser development on localhost. The commands below assume a Debian/Ubuntu host and a checkout of this repository.
+You need Docker Engine with the Compose plugin, nginx, Certbot, a domain pointing to the host, and inbound TCP ports 80 and 443. The local verification commands also require Bun 1.4.3. Keep port 3210 private. Browser encryption requires HTTPS, except for browser development on localhost. The commands below assume a Debian/Ubuntu host and a checkout of this repository.
 
 ## Interactive setup
 
@@ -16,6 +16,16 @@ The script asks for your domain, loopback port (default `3210`), and storage quo
 
 It can install missing prerequisites, builds a uniquely tagged application image, discovers the Docker bridge gateway, starts the app, configures host nginx, obtains a certificate through interactive Certbot, and enables certificate renewal. Certbot presents its own account and terms prompts. Bun is supplied by the Docker build; a separate host Bun installation is only needed for local test commands.
 
+Running the same command again presents the current domain, port, and quota as defaults, so you can change them. For a code update that keeps the current deployment settings, put the new source in this checkout and run:
+
+```sh
+bash scripts/setup.sh --update
+```
+
+Update mode reads the existing `.env`, shows the settings, and asks for one confirmation. It preserves the domain, port, quota, transfer deadlines, comments, and other environment settings; only the application image tag and inspected Docker proxy peer change. It requires the existing Docker Compose, nginx, curl, and OpenSSL installations and a valid certificate covering the configured domain. It reuses that certificate and leaves the existing Certbot renewal schedule in place. Missing prerequisites or an expired certificate stop the update before replacing the app, with instructions to repair them. Run ordinary setup to configure a new domain or issue a missing certificate.
+
+Both full setup and update build a uniquely tagged image using a temporary configuration before changing the live `.env` or app. An existing Compose network is inspected directly; a missing network is created without replacing an existing container. After the image build and gateway checks succeed, the script backs up the configuration, saves it, and replaces the app. The single-instance service has a brief interruption during replacement. The data volume and previous images are retained.
+
 To generate configuration for review without installing packages, contacting certificate services, or starting containers:
 
 ```sh
@@ -24,7 +34,9 @@ bash scripts/setup.sh --prepare-only
 
 This mode also works on macOS. It writes a private `.env` and rendered `deploy/generated/nginx-http.conf` and `deploy/generated/nginx-https.conf`; the checked-in templates remain unchanged. Existing configuration requires replacement confirmation and is backed up before replacement. The script reads supported `.env` values as data, without executing shell expressions. Review the generated files before running the full setup.
 
-Full setup targets native Linux Docker bridge networking and one host nginx instance. It does not configure DNS, firewalls, remote Docker engines, or external proxies. nginx configuration is validated before reload; a failed validation restores the previous site file. A later deployment failure leaves the data volume intact and prints the failed stage. Review migration and rollback limitations below before rerunning setup on an existing service. Never delete the volume to resolve a setup error.
+Use `bash scripts/setup.sh --update --prepare-only` to render the current templates with existing settings. It leaves `.env` contents unchanged, retains backups, and requires no Docker or certificate access.
+
+Full setup targets native Linux Docker bridge networking and one host nginx instance. It does not configure DNS, firewalls, remote Docker engines, or external proxies. nginx configuration is validated before reload; failed validation or reload restores the previous site file, and certificate issuance failure restores the preexisting site. Update mode always keeps HTTPS configuration and does not install the HTTP bootstrap site. A build or gateway-check failure leaves the running app and live `.env` unchanged. A later failure prints the failed stage and retains the data volume and backups. Once replacement has started, migrations may have run: the script does not automatically roll back the image or database. Review the rollback limitations below before restoring an earlier configuration. Never delete the volume to resolve a setup error.
 
 ## Manual first deployment
 
@@ -54,7 +66,7 @@ bun run test:coverage
 SMALLBIN_IMAGE=smallbin:initial docker compose build
 ```
 
-Set `SMALLBIN_IMAGE=smallbin:initial` in `.env`. The Docker build uses Bun 1.4.2 and runs the production application build. The committed lockfile is required. `bunfig.toml` requires packages to be at least 14 days old when resolving new versions; do not bypass this policy when updating dependencies.
+Set `SMALLBIN_IMAGE=smallbin:initial` in `.env`. The Docker build uses Bun 1.4.3 and runs the production application build. The committed lockfile is required. `bunfig.toml` requires packages to be at least 14 days old when resolving new versions; do not bypass this policy when updating dependencies.
 
 Create the stopped container and inspect its Docker network gateway:
 
@@ -141,7 +153,9 @@ Then `chown` that directory to the printed UID/GID and mount it at `/data`. Keep
 
 ## Upgrades, rollback, and shutdown
 
-Test the new code, then build a new image tag without overwriting the old one:
+After updating the source in the existing checkout, use `bash scripts/setup.sh --update` for the interactive procedure above. It rebuilds from the current source; it does not fetch repository changes. Keep the checkout's `.env` and the existing Docker volume in place.
+
+For a manual upgrade, test the new code, then build a new image tag without overwriting the old one:
 
 ```sh
 bun install --frozen-lockfile

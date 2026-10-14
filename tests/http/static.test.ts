@@ -8,6 +8,7 @@ afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { rec
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "smallbin-assets-")); roots.push(root);
   await Bun.write(join(root, "index.html"), "<!doctype html><title>Smallbin</title>");
+  await Bun.write(join(root, "privacy.html"), "<!doctype html><title>Privacy | Smallbin</title><h1>Privacy</h1>");
   await Bun.write(join(root, "app.js"), "void 0");
   await Bun.write(join(root, "secret.sqlite"), "never serve me");
   return createStaticHandler(root);
@@ -27,6 +28,20 @@ test("static asset handling rejects files outside build assets and unsupported m
   expect(await handle(new Request("https://smallbin.test/", { method: "HEAD" })).text()).toBe("");
   for (const route of ["/secret.sqlite", "/.env", "/unknown", "/b/bad"]) expect(handle(new Request(`https://smallbin.test${route}`)).status).toBe(404);
   expect(handle(new Request("https://smallbin.test/", { method: "POST" })).status).toBe(405);
+});
+test("privacy serves its complete document for GET and preserves headers for HEAD", async () => {
+  const handle = await fixture();
+  const response = handle(new Request("https://smallbin.test/privacy"));
+  expect(await response.text()).toContain("<h1>Privacy</h1>");
+  const head = handle(new Request("https://smallbin.test/privacy", { method: "HEAD" }));
+  expect(head.status).toBe(200);
+  expect(head.headers.get("content-type")).toContain("text/html");
+  expect(await head.text()).toBe("");
+});
+test("startup rejects an incomplete build without the privacy document", async () => {
+  const root = await mkdtemp(join(tmpdir(), "smallbin-incomplete-")); roots.push(root);
+  await Bun.write(join(root, "index.html"), "<!doctype html><title>Smallbin</title>");
+  await expect(createStaticHandler(root)).rejects.toThrow("Privacy page");
 });
 test("startup fails rather than serving missing frontend", async () => {
   const root = await mkdtemp(join(tmpdir(), "smallbin-empty-")); roots.push(root);

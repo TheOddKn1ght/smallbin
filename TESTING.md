@@ -1,6 +1,6 @@
 # Testing Smallbin
 
-Use Bun 1.4.2 and the committed lockfile:
+Use Bun 1.4.3 and the committed lockfile:
 
 ```sh
 bun install --frozen-lockfile
@@ -13,7 +13,7 @@ The Bun suites cover the encryption envelope, malformed/tampered input, server r
 
 ## GitHub Actions
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on pushes, pull requests, and manual dispatches. Both jobs use Ubuntu 24.04, Bun 1.4.2, and frozen lockfile installation with the existing 14-day package-age policy.
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on pushes, pull requests, and manual dispatches. Both jobs use Ubuntu 24.04, Bun 1.4.3, and frozen lockfile installation with the existing 14-day package-age policy.
 
 - **Bun and browser tests:** typecheck, coverage suites, production build, Chromium installation with system dependencies, then browser and production-startup tests. Coverage and generated screenshots are retained as the `test-reports` artifact for seven days, including when a later step fails.
 - **Docker and nginx tests:** validate Compose, build the application image, pull the test nginx image, and run the disposable deployment smoke suite, including the maximum-size transfer.
@@ -21,6 +21,10 @@ The Bun suites cover the encryption envelope, malformed/tampered input, server r
 The jobs need no repository secrets and use read-only repository permissions. Actions are pinned to commit hashes. New commits cancel older runs for the same ref. CI tests the code without publishing images or deploying the service; a successful hosted run is still needed to verify the Docker checks on that runner.
 
 ## Browser tests
+
+The production startup/restart test launches the built server with `--smol`, matching Docker and `bun run start`. Deployment contracts keep the Bun pins in `package.json`, Docker, and CI in sync and check `--smol` on each server launch command and the container healthcheck.
+
+Privacy performance regressions check direct visits with JavaScript disabled, zero script/API requests, keyboard use on mobile, and in-app navigation/back/forward without reloading the document. Both production and development entry points serve a populated privacy document with the same security headers. The production build renders this page from the shared React components; development renders it once at startup.
 
 Install the Chromium revision matching the locked Playwright version, build the production assets, then run the browser suite:
 
@@ -75,7 +79,7 @@ All containers bind only to randomly assigned localhost ports. Resource names ha
 | Downloads started before expiry, cancellation/deadlines, released quotas, graceful shutdown | `tests/server/app.test.ts`, `tests/server/storage.test.ts`. |
 | CSP and other privacy headers, static-file isolation, missing frontend rejection | `tests/http/static.test.ts`, `tests/server/app.test.ts`; nginx-generated errors in the unrun deployment script. |
 | Non-root Docker, private ports, persistent volume, healthcheck, 14-day dependency age, nginx buffering/cache/log configuration | `tests/deployment/contracts.test.ts`; actual containers, maximum proxy transfer, 413/429/502, log checks in `scripts/deployment-smoke.ts` (not yet executed successfully). |
-| Interactive setup, generated configuration, input validation, cancellation, and config backups | `tests/deployment/setup.test.ts`; real package installation, certificate issuance, and system service changes require verification on a deployment host. |
+| Interactive setup and updates, staged image build, prerequisite reuse, generated configuration, input validation, cancellation, backups, and certificate checks | `tests/deployment/setup.test.ts` runs fresh, repeated, partial and failed deployments against a mocked host, checking existing settings/data preservation and no early container replacement. Real package installation, certificate issuance, and system service changes require verification on a deployment host. |
 | Host TLS, certificate renewal, gateway discovery, upgrade/rollback, volume permissions and backup exclusions | Operator checklist and commands in `DEPLOYMENT.md`; these host-specific steps require verification on the deployment host. |
 
 The files above identify the assertions to run, not a blanket promise of complete coverage. State the commands and results from the current checkout when reporting verification.

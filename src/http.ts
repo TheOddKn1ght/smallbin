@@ -22,11 +22,13 @@ export async function createStaticHandler(directory: string) {
   }
   const html = assets.get("/index.html");
   if (!html || !(await html.exists())) throw new Error("Frontend assets are missing. Run bun run build first.");
+  const privacy = assets.get("/privacy.html");
+  if (!privacy || !(await privacy.exists())) throw new Error("Privacy page is missing. Run bun run build first.");
   return (request: Request): Response => {
     if (request.method !== "GET" && request.method !== "HEAD") return new Response(null, { status: 405, headers: { ...PAGE_HEADERS, Allow: "GET, HEAD" } });
     const path = new URL(request.url).pathname;
-    const page = path === "/" || path === "/privacy" || /^\/b\/[A-Za-z0-9_-]{20,64}$/.test(path);
-    const file = page ? html : assets.get(path);
+    const page = path === "/" || /^\/b\/[A-Za-z0-9_-]{20,64}$/.test(path);
+    const file = path === "/privacy" ? privacy : page ? html : assets.get(path);
     if (!file) return new Response("Not found", { status: 404, headers: PAGE_HEADERS });
     return new Response(request.method === "HEAD" ? null : file, { headers: { ...PAGE_HEADERS, "Content-Type": file.type } });
   };

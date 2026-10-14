@@ -166,6 +166,51 @@ test("mobile keyboard flow, validation, privacy, and screenshots", async () => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
+test("privacy opens directly without JavaScript or API requests, including mobile keyboard navigation", async () => {
+  const staticContext = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
+  const requests: { url: string; type: string }[] = [];
+  staticContext.on("request", request => requests.push({ url: request.url(), type: request.resourceType() }));
+  try {
+    const privacyPage = await staticContext.newPage();
+    const response = await privacyPage.goto(`${origin}/privacy`);
+    expect(response?.status()).toBe(200);
+    expect(response?.headers()["cache-control"]).toBe("no-store");
+    await browserExpect(privacyPage).toHaveTitle("Privacy | Smallbin");
+    await browserExpect(privacyPage.getByRole("heading", { name: "Your content is encrypted on your device." })).toBeVisible();
+    await browserExpect(privacyPage.getByRole("link", { name: "Privacy", exact: true })).toHaveAttribute("aria-current", "page");
+    await browserExpect(privacyPage.getByRole("link", { name: "New bin", exact: true })).toHaveAttribute("href", "/");
+    expect(await privacyPage.locator("script").count()).toBe(0);
+    expect(requests.some(request => request.type === "script" || request.url.includes("/api/"))).toBe(false);
+    expect(requests.every(request => request.url.startsWith(origin + "/"))).toBe(true);
+    expect(await privacyPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await privacyPage.keyboard.press("Tab");
+    await browserExpect(privacyPage.getByRole("link", { name: "Skip to content" })).toBeFocused();
+    await privacyPage.keyboard.press("Enter");
+    await browserExpect(privacyPage.locator("#main")).toBeFocused();
+  } finally { await staticContext.close(); }
+});
+
+test("in-app privacy navigation and browser history do not reload the document or refetch assets", async () => {
+  const requests: string[] = [];
+  page.on("request", request => requests.push(request.url()));
+  await page.evaluate(() => { (window as unknown as { navigationSentinel: boolean }).navigationSentinel = true; });
+  await page.route("**/privacy", route => route.abort());
+  await page.getByRole("link", { name: "Privacy", exact: true }).click();
+  await browserExpect(page.getByRole("heading", { name: "Privacy", exact: true })).toBeVisible();
+  await browserExpect(page).toHaveTitle("Privacy | Smallbin");
+  await browserExpect(page.locator("#main")).toBeFocused();
+  expect(requests).toEqual([]);
+  expect(await page.evaluate(() => (window as unknown as { navigationSentinel: boolean }).navigationSentinel)).toBe(true);
+  await page.goBack();
+  await browserExpect(page.getByRole("button", { name: "Create private link", exact: true })).toBeEnabled();
+  await browserExpect(page).toHaveTitle("Smallbin");
+  await page.goForward();
+  await browserExpect(page.getByRole("heading", { name: "Privacy", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as { navigationSentinel: boolean }).navigationSentinel)).toBe(true);
+  await page.getByRole("link", { name: "New bin", exact: true }).click();
+  await browserExpect(page.getByRole("button", { name: "Create private link", exact: true })).toBeEnabled();
+});
+
 test("cancelled upload keeps draft and allows retry", async () => {
   let seen!: () => void; const intercepted = new Promise<void>(resolve => { seen = resolve; });
   let release!: () => void; const delayed = new Promise<void>(resolve => { release = resolve; });
